@@ -105,14 +105,17 @@ type Client interface {
 
 ```go
 type Request struct {
-    Model          string          // 来自 providers 注册表
-    System         []SystemBlock   // 系统提示（分段以便缓存）
-    Messages       []Message       // 历史 + 本轮用户消息
-    Tools          []ToolSchema    // 由 tools.Registry 导出
-    ThinkingEffort string          // 空 = 不支持/不启用
+    Model           string          // 来自 providers 注册表
+    System          string          // 系统提示（每回合重建，不进历史）
+    Messages        []Message       // 历史 + 本轮用户消息
+    Tools           []ToolSchema    // llm 自有类型，由 appstate 从 tools.Schema 转换
+    ThinkingEffort  string          // 空 = 不支持/不启用
     MaxOutputTokens int
 }
 ```
+
+> 2026-10-29 实施时调整：`System` 从 `[]SystemBlock` 收为 `string`。分段原本是为提示缓存，
+> 但 OpenAI 兼容协议的缓存按前缀自动命中，分段没有收益；`systemprompt.Build` 内部仍按段拼装并逐段可测。
 
 ```go
 // internal/llm/stream.go

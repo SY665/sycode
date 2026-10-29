@@ -248,7 +248,7 @@ type Request struct {
     Model           string
     System          string
     Messages        []Message
-    Tools           []tools.Schema   // 只读，不反向依赖 tools 实现
+    Tools           []ToolSchema     // llm 自有类型；appstate 负责从 tools.Schema 转换
     ThinkingEffort  string
     MaxOutputTokens int
 }
@@ -266,20 +266,23 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 | 函数 | 签名 | 职责 |
 |---|---|---|
 | `newEvent` | `func newEvent(t EventType, opts ...eventOpt) StreamEvent` | 统一构造，避免字段散填 |
-| `errEvent` | `func errEvent(err error) StreamEvent` | 终态错误 |
-| `doneEvent` | `func doneEvent(usage *Usage) StreamEvent` | 终态完成 |
+| `errEvent` | `func errEvent(err error) StreamEvent` | 终态错误；`nil` 换成兜底说明，保证 `Err != nil` |
+| `doneEvent` | `func doneEvent(usage *Usage) StreamEvent` | 终态完成；`usage` 可为 `nil` |
+| `IsTerminal` | `func (e StreamEvent) IsTerminal() bool` | 终态判据（`done`/`error`），消费方据此收尾，不看 channel 关闭时机 |
 
 ### `systemprompt.go`
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Env` | `type Env struct { OS, Arch, WorkDir, Shell, Model string; Today time.Time }` | 环境事实 |
-| `Build` | `func Build(env Env) string` | 按固定段拼接：身份 → 工具约定 → 环境 → 项目指令(`AGENTS.md`) |
-| `identitySection` | `func identitySection() string` | 私有，可单独比对 |
-| `envSection` | `func envSection(env Env) string` | 含 `Current shell:`（ADR-006 要求） |
-| `projectSection` | `func projectSection(workDir string) string` | 读 `AGENTS.md`，超长截断并注明 |
+| `Env` | `type Env struct { OS, Arch, WorkDir, Shell, Model string; Today time.Time }` | 环境事实；全由调用方注入，`Build` 因此可测 |
+| `Build` | `func Build(env Env) string` | 按固定段拼接：身份 → 环境 → 项目指令(`AGENTS.md`)。**工具约定段随 P3 加入**——现在写会让模型以为有工具却调不到 |
+| `identitySection` | `func identitySection() string` | 身份与工作方式；中文（界面/错误/工具描述都是中文，保持一致） |
+| `envSection` | `func envSection(env Env) string` | 含 `Current shell:`（ADR-006 要求的原文写法）；缺值不写该行，全缺则不输出整段 |
+| `archSuffix` | `func archSuffix(arch string) string` | 拼 `/amd64`；空值返回空串 |
+| `projectSection` | `func projectSection(workDir string) string` | 读 `AGENTS.md`；读不到（不存在/无权限/是目录）一律当"没有项目指令"，不阻断对话 |
+| `truncateUTF8` | `func truncateUTF8(s string, limit int) (string, bool)` | 按字节截断但**不切断多字节字符**，否则中文会切出 U+FFFD |
 
-阈值集中为常量：`maxProjectInstructions = 8 * 1024`。
+阈值集中为常量：`maxProjectInstructions = 8 * 1024`、`projectInstructionsFile = "AGENTS.md"`。
 
 ### `openai.go`
 

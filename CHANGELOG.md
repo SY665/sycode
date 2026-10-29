@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `internal/llm`：`Client` 契约、`Request`/`Message`/`Role`/`ToolCall`/`ToolSchema`、`StreamEvent`（8 类事件 + `IsTerminal`）、三个事件构造器；`systemprompt.Build` 按 身份 → 环境 → `AGENTS.md` 拼装（`Current shell:` 按 ADR-006 原样，8KiB 截断且不切断多字节字符）
 - **启动接线**：`run()` 经 `resolveModel` 串起注册表 → 配置 → 合并 → 密钥校验；解析成功把模型名交给界面标题，`slog.Debug` 只记 provider/model/base_url；解析失败（缺密钥、配置写坏、模型与供应商不匹配）不进入界面、退出码 1 并给出可操作文案；`--version` / `--help` 不依赖密钥
 - `internal/config`：`configs.json` 加载（缺文件不报错）、三级优先级合并（参数 > 配置 > 注册表）、密钥按环境变量名解析且不回显
 - `internal/providers`：内嵌 `registry.yaml`（3 供应商 / 4 模型）、`Load`/`LoadFile`/`Find`/`Default`，含 6 类非法注册表校验

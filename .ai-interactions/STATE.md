@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 18:45 | 阶段：**P2** | 当前单元：2.3 已完成，下一单元 2.4（`internal/llm` 核心类型）
+更新时间：2026-10-29 18:55 | 阶段：**P2** | 当前单元：2.4 已完成，下一单元 2.5（`internal/llm/openai.go` SSE）
 
 ## 已完成（本阶段）
 
@@ -22,20 +22,27 @@
 - 单元 2.3 已收口（接线）：`main.resolveModel()` + `cmd.Options.ResolveModel`（延迟解析，`--version` 不依赖密钥）；
   缺密钥/配置坏退出 **1**（2 只留给用法错误，已改 CODE-DESIGN §1）；模型名进界面标题；调试日志只有 provider/model/base_url
 - 单元 2.3 附带修复：`config.Resolve` 只指定供应商时错误沿用 `defaults.model` → 改用新增的 `providers.FirstModel`
-- 代码 2,084 行（源码 993 / 测试 1,091），15 笔提交
-- 记录：`output-2/3_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 2.4 已收口（`internal/llm` 核心）：`client.go`/`request.go`/`stream_events.go`/`systemprompt.go`（328 行 + 259 行测试）
+  - `System` 用 `string`（弃 `[]SystemBlock`，OpenAI 缓存按前缀自动命中）；`Tools` 用 llm 自有 `ToolSchema`（不 import tools，P3 由 appstate 转换）
+  - 事件：8 类 + `IsTerminal`；`newEvent(eventOpt…)`/`errEvent(nil 兜底)`/`doneEvent(usage 可为 nil)`
+  - 系统提示中文，段序 身份 → 环境 → `AGENTS.md`；`Current shell:` 保留 ADR-006 原文；8KiB 截断用 `truncateUTF8` 不切汉字
+  - **工具约定段故意不写**（P2 无工具，写了会诱发幻觉调用），P3 补
+- 代码 2,671 行（源码 1,321 / 测试 1,350），16 笔提交
+- 记录：`output-2/3/4_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P2 单元 2.4 —— `internal/llm` 核心类型与系统提示**（`client.go`/`request.go`/`stream_events.go`/`systemprompt.go`，3–4 个文件）：
+**P2 单元 2.5 —— `internal/llm/openai.go` SSE 流式解析 + `errors.go`**（2–3 个文件）：
 
-1. `client.go`：`Client` 接口（`StreamChat(ctx, Request) (<-chan StreamEvent, error)`），定义在消费方
-2. `request.go`：`Request`/`Message`/`Role`/`ToolCall`；`Tools []tools.Schema` **只读**使用，`llm` 不 import `tools` 的实现
-3. `stream_events.go`：`StreamEvent`/`EventType`/`Usage` + 三个构造器 `newEvent`/`errEvent`/`doneEvent`（统一构造，禁止散填字段）
-4. `systemprompt.go`：`Env` + `Build`（身份 → 工具约定 → 环境 → `AGENTS.md`，阈值常量 `maxProjectInstructions`=8KiB）
-5. 验收：单测覆盖分段构建（每段可单独断言）与终态事件（`EventDone`/`EventError` 只能作为最后一个）
+1. `OpenAIConfig{BaseURL, APIKey, Model}` + `NewOpenAI(cfg) (*OpenAI, error)`：只校验（baseURL 可解析、model 非空），**不发请求**
+2. `StreamChat(ctx, req)`：起 goroutine，返回只读 channel；发送方关闭；`EventDone`/`EventError` 必为最后一个
+3. `parseSSE(ctx, r io.Reader, out chan<- StreamEvent) error`：`data:` 分片、跨行块、`[DONE]`、`event:` 行忽略
+4. `toOpenAIMessages` / `toOpenAITools`：纯转换，单测直接比结构
+5. `errors.go`：`Translate`（英文原始错误 → 中文，`%w` 保留链）+ `httpStatusError{Status, Code, Body}`
+6. 验收：`httptest` 回放四类流——正常、跨行分片、中途断开、缺 `[DONE]`
 
-不要在这一单元写 HTTP/SSE（那是 2.5 的 `openai.go`）。
+先确认要不要引 `github.com/openai/openai-go`（CODE-DESIGN §5 的 `toOpenAIMessages` 用了它的类型）。
+**引第三方 SDK 属于表外依赖，必须先问用户**；不引就自己写 `encoding/json` + `bufio.Scanner` 解析 SSE（约 150 行，可控）。
 
 ## 已知坑 / 需要绕过的东西
 

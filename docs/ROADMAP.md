@@ -56,7 +56,7 @@
 | 2.1 | `internal/providers`：`registry.yaml` + 加载 + 查询 | ✅ 内嵌表解析 + 6 类非法输入校验；未命中返回 `false` 不 panic |
 | 2.2 | `internal/config`：分层加载 + 密钥解析 | ✅ 三级优先级；缺 key 报"请设置环境变量 X"，错误中无密钥内容 |
 | 2.3 | 启动接线：`run()` 串起注册表 → 配置 → 密钥 → 界面 | ✅ 配好 key 时标题显示模型、日志只记 provider/model/base_url；缺 key 退出 1 并指出环境变量名，不进入界面；`--version` 不依赖密钥 |
-| 2.4 | `internal/llm`：`Request`/`Message`/`StreamEvent` + 系统提示 | 单测覆盖分段构建与终态事件 |
+| 2.4 | `internal/llm`：`Request`/`Message`/`StreamEvent` + 系统提示 | ✅ 单测覆盖分段构建与终态事件（每段可单独断言；`done`/`error` 是唯一终态，`errEvent(nil)` 有兜底） |
 | 2.5 | `internal/llm/openai.go`：SSE 流式解析 | `httptest` 回放：正常/跨行分片/中断/`[DONE]` |
 | 2.6 | 重试与错误分类 | 429 重试 3 次后报错；400 不重试 |
 | 2.7 | REPL 流式渲染 + `Esc` 中断 | 中断后 UI 不残留半截状态 |
