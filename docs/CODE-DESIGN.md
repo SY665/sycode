@@ -126,9 +126,15 @@ run() int
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Load` | `func Load() ([]Provider, error)` | `//go:embed registry.yaml` → 解析 + 校验（id 唯一、context_window > 0） |
-| `Find` | `func Find(providerID, modelID string) (Model, bool)` | 未知模型返回 `false`，**不 panic** |
-| `Default` | `func Default() (providerID, modelID string)` | 首次运行的兜底 |
+| `Load` | `func Load() (*Registry, error)` | `//go:embed registry.yaml` → 解析 + 校验 |
+| `LoadFile` | `func LoadFile(r io.Reader) (*Registry, error)` | 任意来源解析，供测试与将来的自定义注册表；`Load` 也走它 |
+| `Find` | `func (r *Registry) Find(providerID, modelID string) (Provider, Model, bool)` | 找不到返回 `false`；供应商命中但模型没命中时**仍返回该 Provider**，调用方据此区分"供应商错"还是"模型错" |
+| `Default` | `func (r *Registry) Default() (providerID, modelID string)` | 首次运行的兜底 |
+| `parse` / `validate` | 私有 | YAML 解析与自洽性校验（id 唯一、`context_window > 0`、默认值必须存在） |
+
+数据结构（**加法变更，2026-10-29**）：`Provider` 增加 `BaseURL` 与 `APIKeyEnv`。
+理由：这两个是供应商固有能力，若放进用户配置，每个用户都要为同一个端点重复填写；
+用户配置只负责"选择与覆盖"。
 
 ### `internal/filesystem/`
 

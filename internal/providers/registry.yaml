@@ -1,0 +1,51 @@
+# SyCode 模型注册表
+#
+# 用途：给「选哪个模型」提供元数据，不需要联网即可知道上下文窗口与思考档位。
+# 维护：新增供应商/模型时改本文件，不需要改代码。
+# 注意：context_window 与 thinking_efforts 必须按供应商官方文档核对后再填，
+#       填错会导致上下文预算计算与实际不符（P4 会据此显示占用进度）。
+#
+# 字段说明：
+#   id               供应商标识，命令行与配置里用它（小写）
+#   base_url         OpenAI 兼容端点；本地服务可填 http://127.0.0.1:11434/v1
+#   api_key_env      读取密钥的环境变量名；本地服务无密钥时可留空
+#   models[].id      传给接口的 model 参数原文
+#   context_window   上下文窗口（token）
+#   thinking_efforts 该模型支持的思考档位；留空表示不支持可配置思考
+
+defaults:
+  provider: openai
+  model: gpt-4o-mini
+
+providers:
+  - id: openai
+    name: OpenAI
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    models:
+      - id: gpt-4o-mini
+        name: GPT-4o mini
+        context_window: 128000
+      - id: gpt-4o
+        name: GPT-4o
+        context_window: 128000
+
+  # 国内常用的 OpenAI 兼容端点：换 base_url 与 model 即可，无需改代码。
+  - id: deepseek
+    name: DeepSeek
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    models:
+      - id: deepseek-chat
+        name: DeepSeek Chat
+        context_window: 65536
+
+  # 本地/自建端点示例：无密钥，base_url 指向本机。
+  - id: local
+    name: 本地服务
+    base_url: http://127.0.0.1:11434/v1
+    api_key_env: ""
+    models:
+      - id: local-model
+        name: 本地模型（占位）
+        context_window: 8192
