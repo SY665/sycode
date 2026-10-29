@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 19:05 | 阶段：**P2** | 当前单元：2.2 已完成，下一单元 2.3（启动接线）
+更新时间：2026-10-29 18:45 | 阶段：**P2** | 当前单元：2.3 已完成，下一单元 2.4（`internal/llm` 核心类型）
 
 ## 已完成（本阶段）
 
@@ -19,19 +19,23 @@
 - 单元 1.5 已收口：`internal/cli/cmd/deps_test.go`（123 行），已用注入违规反证有效性
 - 单元 2.1 已收口：`internal/providers`（155 行 + 165 行测试 + registry.yaml）；yaml.v3 已获批
 - 单元 2.2 已收口：`internal/config`（205 行 + 215 行测试）：三级优先级、两类查找错误、密钥三态
-- 记录：`output-2/3/4_impl-*.md`
+- 单元 2.3 已收口（接线）：`main.resolveModel()` + `cmd.Options.ResolveModel`（延迟解析，`--version` 不依赖密钥）；
+  缺密钥/配置坏退出 **1**（2 只留给用法错误，已改 CODE-DESIGN §1）；模型名进界面标题；调试日志只有 provider/model/base_url
+- 单元 2.3 附带修复：`config.Resolve` 只指定供应商时错误沿用 `defaults.model` → 改用新增的 `providers.FirstModel`
+- 代码 2,084 行（源码 993 / 测试 1,091），15 笔提交
+- 记录：`output-2/3_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-计划已批后，按 `outputs/phase-1/output-1_plan-unit-1-1.md` 执行：
+**P2 单元 2.4 —— `internal/llm` 核心类型与系统提示**（`client.go`/`request.go`/`stream_events.go`/`systemprompt.go`，3–4 个文件）：
 
-**P2 单元 2.3 —— 启动接线**（`cmd/main.go` + `internal/cli/cmd/root.go`，2 个文件）：
+1. `client.go`：`Client` 接口（`StreamChat(ctx, Request) (<-chan StreamEvent, error)`），定义在消费方
+2. `request.go`：`Request`/`Message`/`Role`/`ToolCall`；`Tools []tools.Schema` **只读**使用，`llm` 不 import `tools` 的实现
+3. `stream_events.go`：`StreamEvent`/`EventType`/`Usage` + 三个构造器 `newEvent`/`errEvent`/`doneEvent`（统一构造，禁止散填字段）
+4. `systemprompt.go`：`Env` + `Build`（身份 → 工具约定 → 环境 → `AGENTS.md`，阈值常量 `maxProjectInstructions`=8KiB）
+5. 验收：单测覆盖分段构建（每段可单独断言）与终态事件（`EventDone`/`EventError` 只能作为最后一个）
 
-1. `run()` 按 CODE-DESIGN §1 的顺序：logging → providers.Load → config.Load → Resolve → ResolveKey
-2. 缺密钥：退出码 2 + 中文错误（提示该设哪个环境变量），不进入界面
-3. 解析成功：`slog.Debug` 记录 provider/model/base_url（**不打密钥**）
-4. 把解析结果放进 `cmd.Options`，界面标题显示模型名
-5. 验收：`sycode` 在配好 key 时标题显示模型；未配 key 时退出码 2 且错误可操作
+不要在这一单元写 HTTP/SSE（那是 2.5 的 `openai.go`）。
 
 ## 已知坑 / 需要绕过的东西
 
@@ -40,6 +44,9 @@
 - `-race` 需要 cgo + gcc：`/d/mingw64/bin` 进 PATH 后 `CGO_ENABLED=1`；否则脚本跳过并提示
 - 版本号必须是 `var version`，`-X` 对 `const` 静默失效
 - Windows：`Add-Type` 被安全策略禁用；PowerShell 有批量删除护栏；`robocopy` 要从 bash 调并加 `MSYS2_ARG_CONV_EXCL=*`
+- 工具 shell 无 TTY：`sycode` 只能验到"解析通过 → 报需要终端"；界面观感要人工在真终端看
+- 手工验配置时用 `env USERPROFILE=<临时home> HOME=<临时home> ./sycode` 隔离 `~/.sycode`，别写脏真实 home
+- 当前 shell 里 `VAR=x cmd | other` 只给 `cmd` 生效：要给被测程序传变量，写成 `... | env VAR=x ./prog`
 
 ## 已定（原待决策，2026-10-29 采纳推荐）
 
@@ -50,6 +57,7 @@
 | `cli/repl` 子包节奏 | P1 只建 `stream`/`output`/`theme`，其余随功能出现再建 |
 | 工具循环位置 | 集中在 `appstate/turn.go`，不复制进 provider（ADR-001） |
 | 质量门形态 | 以 `scripts/check.sh` 为准，`make` 只是薄封装（本机无 make） |
+| 退出码口径 | **0 成功 / 1 一般错误 / 2 用法错误**（配置类失败一律 1）。原「缺密钥退出 2」已改，CODE-DESIGN §1 同步 |
 
 ## 待决策
 
