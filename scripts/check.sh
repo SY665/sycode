@@ -24,7 +24,11 @@ step "go vet"
 go vet ./... || fail=1
 
 step "go build"
-go build ./... || fail=1
+# 注意：直接 `go build ./...` 会把 main 包的二进制写到当前目录（仓库根），
+# 造成二进制被误提交。用 -o <临时目录>/ 把它导走。
+build_out="$(mktemp -d)"
+go build -o "${build_out}/" ./... || fail=1
+rm -rf "${build_out}" 2>/dev/null || true
 
 step "go test"
 go test ./... || fail=1
