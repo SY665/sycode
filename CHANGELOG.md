@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `internal/logging`：`Init`（返回 cleanup 与日志路径）、`SYCODE_LOG_LEVEL` 解析（未知值回退 info）、`~/.sycode/logs/sycode-<时间戳>.log` 的 JSON 日志；`run()` 已接线，初始化失败退出码 1
 - 规划文档：PRD、架构 RFC（含 ADR-001~008）、路线图、开发流程、编码规范；`.ai-interactions` 留痕骨架与三份模板
 - `docs/CODE-DESIGN.md`：逐文件的函数清单、启动/关闭顺序、命名动词表、反面清单、与常见实现的函数级对应
 - `docs/CODING-STANDARDS.md` §12 注释分级、§13 中文错误文案（分层语言规则、四要素、前缀表、汉化落点）
