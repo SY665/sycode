@@ -28,7 +28,7 @@ SyCode 是 Go 编写的终端 AI 编程代理。你（AI 编码代理）在此�
 
 上下文紧张时按此顺序降级：先让文件可编译 → 把 `STATE.md` 的"下一步第一件事"写到能直接开工 → 提交 → 再停。**禁止留半截语法**。
 
-新会话续接：读 `.ai-interactions/STATE.md` → `git log -3 --stat` → `CODE-DESIGN.md` 对应小节，不要从 PRD 重新读起。
+新会话续接：先读 `.ai-interactions/HANDOFF.md`（世界规则、参考项目在哪、代价最高的坑），再读 `.ai-interactions/STATE.md` → `git log -3 --stat` → `CODE-DESIGN.md` 对应小节，不要从 PRD 重新读起。
 
 ## 目录速查
 
