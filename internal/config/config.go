@@ -85,13 +85,19 @@ func (c Config) Resolve(reg *providers.Registry, providerID, modelID string) (Re
 	if modelID == "" {
 		modelID = c.ActiveModel
 	}
-	if providerID == "" || modelID == "" {
-		defProvider, defModel := reg.Default()
-		if providerID == "" {
-			providerID = defProvider
-		}
-		if modelID == "" {
+
+	defProvider, defModel := reg.Default()
+	if providerID == "" {
+		providerID = defProvider
+	}
+	if modelID == "" {
+		// 只有供应商也落在默认那家时，才沿用它配的默认模型。
+		// 否则会拿默认供应商的模型去配别人（如 deepseek/gpt-4o-mini），
+		// 报出"模型不属于供应商"——用户明明只改了一项，却要为两项都对不上买单。
+		if providerID == defProvider {
 			modelID = defModel
+		} else {
+			modelID = reg.FirstModel(providerID)
 		}
 	}
 

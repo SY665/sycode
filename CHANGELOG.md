@@ -8,6 +8,9 @@
 - **启动接线**：`run()` 经 `resolveModel` 串起注册表 → 配置 → 合并 → 密钥校验；解析成功把模型名交给界面标题，`slog.Debug` 只记 provider/model/base_url；解析失败（缺密钥、配置写坏、模型与供应商不匹配）不进入界面、退出码 1 并给出可操作文案；`--version` / `--help` 不依赖密钥
 - `internal/config`：`configs.json` 加载（缺文件不报错）、三级优先级合并（参数 > 配置 > 注册表）、密钥按环境变量名解析且不回显
 - `internal/providers`：内嵌 `registry.yaml`（3 供应商 / 4 模型）、`Load`/`LoadFile`/`Find`/`Default`，含 6 类非法注册表校验
+
+### Fixed
+- `config.Resolve` 只指定 `active_provider` 时错误沿用了 `defaults.model`（属于默认供应商），导致切换到 deepseek 报"模型不属于供应商"；改为退到该供应商的第一个模型（新增 `providers.Registry.FirstModel`）
 - `internal/cli/cmd/deps_test.go`：用 `go list` 读取真实 import 图，断言 `CODING-STANDARDS §2.2` 的禁止边（已做反证：注入违规会失败）
 - `internal/cli/repl`：Bubble Tea v2 最小界面（textarea 输入、`Enter` 提交、`/exit`、双击 `Ctrl+C` 退出）；非 TTY 下给出中文提示而非花屏
 - `internal/cli/cmd`：cobra 命令树（`sycode` / `version` / `run`）、中文帮助与错误、退出码 0/1/2 分离；`--version` 输出 `0.1.0 (build <sha>)`

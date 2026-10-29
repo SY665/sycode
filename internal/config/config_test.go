@@ -145,6 +145,23 @@ func TestResolveModelNotBelongingToProvider(t *testing.T) {
 	}
 }
 
+func TestResolveProviderOnlyUsesThatProvidersFirstModel(t *testing.T) {
+	reg := loadRegistry(t)
+	// 用户只把 active_provider 改成 deepseek、没写 active_model：
+	// 此时不能沿用 defaults.model（属于 openai），否则会报"模型不属于供应商"。
+	got, err := Config{ActiveProvider: "deepseek"}.Resolve(reg, "", "")
+	if err != nil {
+		t.Fatalf("只指定供应商时应能解析出模型：%v", err)
+	}
+	if got.ModelID != "deepseek-chat" {
+		t.Errorf("应退到该供应商的第一个模型 deepseek-chat，实际 %q", got.ModelID)
+	}
+	// 端点与密钥变量也必须跟着换家，否则会拿 deepseek 的模型去打 openai。
+	if got.APIKeyEnv != "DEEPSEEK_API_KEY" {
+		t.Errorf("api_key_env 应来自 deepseek，实际 %q", got.APIKeyEnv)
+	}
+}
+
 func TestResolveKey(t *testing.T) {
 	t.Run("读取环境变量", func(t *testing.T) {
 		t.Setenv("SYCODE_TEST_KEY", "sk-test")

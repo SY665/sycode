@@ -88,6 +88,22 @@ func (r *Registry) Default() (providerID, modelID string) {
 	return r.DefaultProvider, r.DefaultModel
 }
 
+// FirstModel 返回该供应商的第一个模型 id；供应商不存在时返回空串。
+//
+// 供"只指定了供应商、没指定模型"的情况使用：此时不能沿用 defaults.model，
+// 那属于默认供应商，配到别家只会得到"模型不属于供应商"这种无从下手的错。
+func (r *Registry) FirstModel(providerID string) string {
+	for _, p := range r.Providers {
+		if p.ID == providerID {
+			if len(p.Models) == 0 {
+				return ""
+			}
+			return p.Models[0].ID
+		}
+	}
+	return ""
+}
+
 // parse 解析并校验。校验失败一律返回错误而不是静默忽略：
 // 注册表是手改文件，写错字段名时最需要的是立刻报错。
 func parse(data []byte) (*Registry, error) {

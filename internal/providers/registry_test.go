@@ -57,6 +57,21 @@ func TestFindUnknown(t *testing.T) {
 	}
 }
 
+func TestFirstModel(t *testing.T) {
+	reg, err := Load()
+	if err != nil {
+		t.Fatalf("解析内嵌注册表失败：%v", err)
+	}
+
+	// 内嵌表里 deepseek 只有一个模型，用它断言"取第一个"这个契约。
+	if got := reg.FirstModel("deepseek"); got != "deepseek-chat" {
+		t.Errorf("deepseek 的第一个模型应为 deepseek-chat，实际 %q", got)
+	}
+	if got := reg.FirstModel("nope"); got != "" {
+		t.Errorf("未知供应商应返回空串，实际 %q", got)
+	}
+}
+
 func TestLoadFile_Valid(t *testing.T) {
 	const doc = `
 defaults:

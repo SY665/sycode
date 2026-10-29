@@ -127,11 +127,15 @@ run() int
 | | `Resolved` | `type Resolved struct { ProviderID, ModelID, BaseURL, APIKeyEnv, ThinkingEffort string; ContextWindow int }` |
 | | `Load` | `func Load(path string) (Config, error)`：文件不存在 → 空 Config + nil（首次运行不是错误） |
 | | `DefaultPath` | `func DefaultPath() (string, error)` |
-| | `Resolve` | `func (c Config) Resolve(reg *providers.Registry, providerID, modelID string) (Resolved, error)`：显式参数 > 配置 `active_*` > 注册表默认 |
+| | `Resolve` | `func (c Config) Resolve(reg *providers.Registry, providerID, modelID string) (Resolved, error)`：显式参数 > 配置 `active_*` > 注册表默认；**只指定供应商时退到该供应商的第一个模型**（见下方"默认模型回退"） |
 | `key_resolver.go` | `ResolveKey` | `func ResolveKey(r Resolved) (string, error)`：按 `APIKeyEnv` 读环境变量；`APIKeyEnv` 为空表示不需要密钥 |
 
 > 与早期计划的差异（2026-10-29）：原计划拆 `loader.go`，实际并入 `config.go`——
 > 加载只有两个函数，单独成文件不增加可读性，还把单元推到 4 个文件（超过上限）。
+
+**默认模型回退**（2026-10-29 修）：`defaults.model` 属于默认供应商，只在供应商也落回默认那家时才采用；
+用户把 `active_provider` 改成别家而没写 `active_model` 时，退到该供应商的第一个模型（`Registry.FirstModel`）。
+否则会拿 `openai/gpt-4o-mini` 去配 `deepseek`，报"模型不属于供应商"——用户只改了一项，却要为两项都对不上买单。
 
 **错误契约**：缺 key 返回的错误必须包含供应商名与"该设哪个环境变量"，且**绝不回显 key**。
 
@@ -143,6 +147,7 @@ run() int
 | `LoadFile` | `func LoadFile(r io.Reader) (*Registry, error)` | 任意来源解析，供测试与将来的自定义注册表；`Load` 也走它 |
 | `Find` | `func (r *Registry) Find(providerID, modelID string) (Provider, Model, bool)` | 找不到返回 `false`；供应商命中但模型没命中时**仍返回该 Provider**，调用方据此区分"供应商错"还是"模型错" |
 | `Default` | `func (r *Registry) Default() (providerID, modelID string)` | 首次运行的兜底 |
+| `FirstModel` | `func (r *Registry) FirstModel(providerID string) string` | 该供应商的第一个模型；供应商不存在返回空串。供"只指定了供应商"的场合使用，避免沿用别家的 `defaults.model` |
 | `parse` / `validate` | 私有 | YAML 解析与自洽性校验（id 唯一、`context_window > 0`、默认值必须存在） |
 
 数据结构（**加法变更，2026-10-29**）：`Provider` 增加 `BaseURL` 与 `APIKeyEnv`。
@@ -442,3 +447,5 @@ type AgentCore interface {
 | 日期 | 变更 |
 |---|---|
 | 2026-10-29 | 初稿：函数级设计、启动顺序、动词表、反面清单、与常见实现的函数对应 |
+| 2026-10-29 | 启动接线落地：§1 步骤 2–5 收进 `main.resolveModel` 并延迟执行；缺密钥改判退出 1（2 只留给用法错误） |
+| 2026-10-29 | `config.Resolve` 默认模型回退修正：只指定供应商时用该供应商的第一个模型（新增 `Registry.FirstModel`） |
