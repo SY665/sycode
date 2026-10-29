@@ -159,18 +159,38 @@ run() int
 
 `guard.go`：
 
+| 元素 | 签名 | 职责 |
+|---|---|---|
+| `Permission` | `Denied` / `Pending` / `Granted`（`String()` 给弹窗用） | 三态；**零值是 `Denied`**：新增分支忘赋值时倾向于拒绝 |
+| `Op` | `OpRead` / `OpWrite` / `OpExec` | 用类型而非字符串：写错就编译不过，不会静默放行 |
+| `Reason` | `type Reason struct { Code ReasonCode; Message string }` | `Code` 供 UI 分支，`Message`（中文）直接进弹窗 |
+| `NewGuard` | `func NewGuard(workingDir string, git *GitAwareness) *Guard` | 预计算工作目录、家目录、系统黑名单、`~/.sycode/bash`；**不返回 error**（取不到路径就退化为"工作目录为空"，一律按外处理） |
+| `Check` | `func (g *Guard) Check(path string, op Op) (Permission, Reason)` | **纯判定**；顺序：artifact → 系统路径 → 家目录隐藏项 → 工作目录内（`.git` → gitignore → read/write）→ 目录外 |
+| `Resolve` | `func (g *Guard) Resolve(path string) (string, error)` | 展开 `~` → 相对工作目录绝对化 → `Clean` → 尽力解析符号链接 |
+| `IsBlocked` | `func (g *Guard) IsBlocked(resolved string) bool` | 系统目录 + 家目录隐藏项；**不含** artifact（它可读） |
+| `WorkDir` | `func (g *Guard) WorkDir() string` | 已绝对化的工作目录，供工具拼提示 |
+| `vcsEntry` | `func (g *Guard) vcsEntry(resolved string) string` | `.git`/`.svn`/`.hg`：里面有远端凭证与钩子脚本 |
+| `sensitiveHomeEntry` | `func (g *Guard) sensitiveHomeEntry(resolved string) (string, bool)` | "隐藏即敏感"：`~` 下以 `.` 开头的项（`.ssh`、`.aws`、`.sycode/configs.json`…） |
+| `defaultBlockedPaths` | `func defaultBlockedPaths() []string` | 平台相关；Windows 从 `SystemRoot`/`ProgramFiles` 取实际盘符，不硬编码 `C:` |
+| `bashOutputDir` | `func bashOutputDir() (string, error)` | `~/.sycode/bash`；`NewGuard` 记下它，`IsBlocked` 对它开例外 |
+| `isUnder` | `func isUnder(parent, child string) bool` | 用 `filepath.Rel` 而非字符串前缀：否则 `work2` 会被当成 `work` 的子目录 |
+| `expandHome` / `absClean` | 私有辅助 | `~` 展开；绝对化失败返回空串（按"未知"从严处理） |
+| `resolveSymlinks` | `func resolveSymlinks(abs string) string` | 目标存在则整体解析；不存在则解析最近的已存在祖先再拼回剩余段（新建文件的常态） |
+| `evalSymlinks` | `var evalSymlinks = filepath.EvalSymlinks` | **仅为可测**：Windows 默认不给建符号链接，测试替换它验证穿越判定；生产不要改 |
+
+`gitawareness.go`：
+
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `NewGuard` | `func NewGuard(workingDir string, git *GitAwareness) *Guard` | 预计算工作目录绝对路径与黑名单 |
-| `Check` | `func (g *Guard) Check(path string, op Op) (Permission, Reason)` | **纯判定**，不碰磁盘内容（只做路径解析与模式匹配） |
-| `Resolve` | `func (g *Guard) Resolve(path string) (string, error)` | 绝对化 + Clean + 符号链接解析后再判 |
-| `IsBlocked` | `func (g *Guard) IsBlocked(resolved string) bool` | 系统目录 / gitignore / 家目录隐藏目录 |
-| `defaultBlockedPaths` | `func defaultBlockedPaths() []string` | 与平台相关（Windows 加 `C:\Windows` 等） |
-| `bashOutputDir` | `func bashOutputDir() (string, error)` | `~/.sycode/bash`，读授权例外 |
+| `NewGitAwareness` | `func NewGitAwareness(root string) (*GitAwareness, error)` | 递归载入 `.gitignore`；跳过 `.git`，**不下沉到已被忽略的目录**（规则在 git 里也不生效，还能避开 node_modules） |
+| `Root` | `func (g *GitAwareness) Root() string` | 规则根目录（已绝对化） |
+| `IsIgnored` | `func (g *GitAwareness) IsIgnored(path string) bool` | 根目录自身与根外路径一律 `false`；`isDir` 由 stat 决定，目录模式 `dist/` 才生效 |
+| `collectPatterns` | 私有递归 | 父目录规则先于子目录，满足 `NewMatcher` 的"优先级递增"要求 |
+| `parseIgnoreFile` | 私有 | 去行尾空格、跳过空行与 `#` 注释 |
 
-`gitawareness.go`：`NewGitAwareness(root string) (*GitAwareness, error)`（递归载入 `.gitignore`）、`IsIgnored(path string) bool`。
+**红线**：`Check` 不允许有副作用；任何文件读写必须 `Check` 之后才执行，`Pending` 还要走"询问 → 允许"。
 
-**红线**：`Check` 不允许有副作用；任何文件读写必须 `Check` 之后才执行，且写操作还要 `Pending → 询问`。
+**已知限制**：`.gitignore` 的 `**` 与 `!` 取反依赖 go-git 的实现（选型表批准它的理由）；`.git/info/exclude` 未载入。
 
 ## 4. 工具层 `internal/tools/`
 

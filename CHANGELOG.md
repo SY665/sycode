@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `internal/filesystem`：`Guard`（权限三态 `Denied/Pending/Granted` + `Reason{Code,Message}`）与 `GitAwareness`（递归载入 `.gitignore`，跳过已忽略目录）。判定顺序 artifact → 系统路径 → 家目录隐藏项 → 工作目录内（`.git` → gitignore → read/write）→ 目录外；`Resolve` 展开 `~`、解析符号链接（含「父目录是链接、目标还不存在」）
 - **REPL 流式渲染**：`repl.Deps` 接入 `agentcore.AgentCore`，正文增量即渲染；重试显示「第 N 次失败，正在重试…」；`Esc` 中断保留已生成内容；流意外结束（无终态）有提示；流式期间拒绝新输入（避免两股回答缠在一起）
 - **启动装配**：`cmd.Env{Model, Core}` + `Options.BuildEnv`；`main.buildEnv` 把解析结果、`llm.OpenAI` 与系统提示（OS/工作目录/shell/日期）组装成 `agentcore.Direct`
 - `internal/agentcore`：`AgentCore` 接口（`Submit`/`Interrupt`/`Messages`/`Clear`）+ P2 的直连实现 `NewDirect`——界面不再直接碰 `llm.Client`；中断后已产出文本仍入历史（PRD F-LLM-6），请求都发不出去的那次不入历史

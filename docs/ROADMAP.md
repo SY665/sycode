@@ -73,7 +73,7 @@
 
 | # | 内容 | 验收 |
 |---|---|---|
-| 3.1 | `filesystem.Guard` + `GitAwareness` | 策略表 6 种场景全部有测试（含符号链接穿越） |
+| 3.1 | `filesystem.Guard` + `GitAwareness` | ✅ 策略表 8 种场景全测；符号链接穿越（含「父目录是链接、目标还不存在」）用可替换解析器覆盖——Windows 默认不给建真链接；`work2` vs `work` 前缀陷阱有回归 |
 | 3.2 | `tools.Registry` + schema 导出 | 注册/去重/导出顺序稳定 |
 | 3.3 | `read_file` / `glob` / `grep` | offset/limit、`**`、include 过滤、超限截断 |
 | 3.4 | `write_file` / `edit_file` | diff 产生；歧义匹配失败并列候选行号 |

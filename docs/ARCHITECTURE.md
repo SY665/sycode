@@ -209,10 +209,17 @@ type Guard interface {
 |---|---|---|---|
 | 工作目录内、未被忽略 | Granted | Pending | Pending |
 | 工作目录内、被 .gitignore 忽略 | Denied | Denied | Denied |
+| 工作目录内、版本库内部（`.git/`、`.svn/`、`.hg/`） | Denied | Denied | Denied |
+| 家目录下的隐藏项（`~/.ssh`、`~/.sycode/configs.json`…） | Denied | Denied | Denied |
 | 工作目录外、非系统路径 | Pending | Pending | Denied |
 | 系统路径（`/etc`、`C:\Windows`…） | Denied | Denied | Denied |
 | `~/.sycode/bash/`（工具输出 artifact） | Granted | Denied | Denied |
 | 符号链接 | 解析后按真实路径判定 | 同左 | 同左 |
+
+> 2026-10-29 补两行：`.git/` 里存着远端地址（可能带 token）与钩子脚本，读它没价值、写它等于改版本库；
+> 家目录隐藏项是凭证集中地，"隐藏即敏感"比逐个列文件可靠（漏一个就是泄露）。
+> 两者的例外都是工具输出目录（它可读不可写）。判定结果除三态外还带 `Reason{Code, Message}`：
+> `Code` 供 UI 分支，`Message` 直接进权限弹窗。
 
 ### 4.4 会话
 

@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 20:15 | 阶段：**P2 功能齐** | 当前单元：2.7 已完成，下一步：真机目视 + 决定 P3 开工
+更新时间：2026-10-29 20:35 | 阶段：**P3** | 当前单元：3.1 已完成，下一单元 3.2（`tools.Registry` + schema）
 
 ## 已完成（本阶段）
 
@@ -42,24 +42,28 @@
   - `internal/agentcore`（30 + 136，测试 320）：`AgentCore` 接口 + P2 直连实现 `Direct`。**界面不再 import llm.Client**
   - `repl` 流式：正文增量即渲染、`EventRetry` 提示、`Esc` 保留已生成内容、流意外结束有提示、流式期间拒绝新输入
   - `main.buildEnv` 装配：配置 → 密钥 → `llm.NewOpenAI` → `systemprompt`（含 `detectShell`，ADR-006）→ `agentcore.Direct`
-- 代码 5,131 行（源码 2,362 / 测试 2,769），20 笔提交；直接依赖 6 个（cobra/bubbletea/bubbles/lipgloss/yaml.v3/openai-go）
-- 记录：`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 3.1 已收口（`guard.go` 368 + `gitawareness.go` 118，测试 442 + 164）：
+  - 三态 `Denied/Pending/Granted`（**零值 Denied**）+ `Reason{Code, Message}`；`Check` 纯判定，顺序 artifact → 系统 → 家目录隐藏项 → 工作目录内（`.git` → gitignore）→ 目录外
+  - **新增两条拒绝**：`.git/`（远端凭证与钩子）、家目录隐藏项（隐藏即敏感）；策略表已从 6 行补到 8 行
+  - `isUnder` 用 `filepath.Rel`（前缀匹配会让 `work2` 混进 `work`）；Windows 折小写比较
+  - `evalSymlinks` 是包内变量：Windows 默认建不了真符号链接，测试替换它压穿越（含"父目录是链接、目标不存在"）
+  - 新增直接依赖 `go-git/go-git/v5`（选型表已批准，只用 gitignore 解析器）
+- 代码 6,223 行（源码 2,848 / 测试 3,375），21 笔提交；直接依赖 7 个
+- 记录：`output-1_impl-filesystem.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
-## 下一步第一件事
+## 下一步第一件事（具体到文件与函数）
 
-**先做人工验收，再开 P3。** 单元 2.7 的代码路径全部有单测，但有三件事只有人能确认：
+**P3 单元 3.2 —— `internal/tools` 契约与注册表**（`tool.go` + `registry.go`，2 个文件）：
 
-1. 真终端里 `sycode` 的观感：标题、流式逐字、输入框位置、`Esc` 后的一行提示是否错位
-2. 真端点流式问答（`OPENAI_API_KEY` 或 `DEEPSEEK_API_KEY` + 可选 `~/.sycode/configs.json` 切供应商）
-3. `Esc` 中断后的实际体验：是否立刻停、已生成内容是否完整保留
+1. `tool.go`：`Input = map[string]any`；`Result{Content string; Display *Display; Artifact string}`；`Schema{Name, Description string; Input map[string]any}`；`Tool` 接口（`Name`/`Description`/`InputSchema`/`Execute`）；可选 `Validator{ValidateInput}`
+2. `registry.go`：`NewRegistry()`、`Register(t Tool) error`（重名/空名报错）、`Get(name)`、`All()`（**注册顺序稳定**）、`Schemas()`（供 `llm` 转换）
+3. **注意依赖方向**：`tools` 不得 import `llm`（`deps_test` 有硬断言）；`llm.ToolSchema` 与 `tools.Schema` 是两个类型，转换在 appstate
+4. 常量：`Result` 的 32KB 上限（`maxInlineBytes`）——3.3 的 read_file 就会用到
+5. 验收：注册重复名报错、导出顺序与注册顺序一致、`Schemas()` 与 `InputSchema()` 一致
 
-**P2 退出条件还差一条**：`sycode run "列出当前目录文件"` 能流式返回——headless 入口是 P4，若想现在收掉 P2，
-需要先做最小 `run`（非流式也行：一条消息、读完打印）。这属于范围决策，开工前问人。
+**先想清楚**：`Display` 结构（diff/表格）在 3.4 才会真正用上；本单元只定义最小形态（`Kind string` + 原始行），别一次设计完。
 
-**P3 第一单元建议**：`internal/filesystem`（`NewGuard`/`Check`/`IsBlocked` + `defaultBlockedPaths`），
-它是所有工具的前置，且纯逻辑好测；`tools` 与 `appstate` 都在它后面。
-
-## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
+## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
 
 - 工具 shell 的 PATH 被裁剪：`go` 不可见 → 先 `source scripts/env.sh`（不是没装）
 - `go build ./...` 会把 main 包二进制写到当前目录 → `scripts/check.sh` 已改成 `-o <临时目录>/`
@@ -73,6 +77,8 @@
   别用它判断"是否完整"，用 `openai.go` 里的结束信号（`finish_reason`/`usage`）
 - `respjson.Field` 只有 `Valid()`/`Raw()`，没有字符串取值：DeepSeek 的 `delta.reasoning_content` 目前读不到（P4 处理）
 - `param.Opt[T]` 没有 `Get()`，用 `Valid()` + `.Value`
+- Windows 默认**不给普通用户建符号链接**（`A required privilege is not held by the client`）：涉及链接的测试要么替换 `filesystem.evalSymlinks`，要么 `t.Skip` 并在 CI（Linux）上跑
+- `go get go-git/v5` 会顺带拉 billy/ssh-agent 等间接依赖；只用 `plumbing/format/gitignore`，不要顺手用它的 Repository（那会真的去开仓库）
 
 ## 已定（原待决策，2026-10-29 采纳推荐）
 
