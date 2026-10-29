@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 19:55 | 阶段：**P2** | 当前单元：2.6 已完成，下一单元 2.7（REPL 流式渲染 + Esc 中断）
+更新时间：2026-10-29 20:15 | 阶段：**P2 功能齐** | 当前单元：2.7 已完成，下一步：真机目视 + 决定 P3 开工
 
 ## 已完成（本阶段）
 
@@ -38,27 +38,28 @@
   - **真 bug**：重试判定在 `Translate` 之前，错误还是 `*oai.Error`；只认 `httpStatusError` 会让 429 一次就失败（测试抓到）
   - `isRetryable` 认 429/5xx/连接失败/流截断；不认 4xx/取消/超时
   - `estimate.go` **主动延后**：现在没有消费方，CODE-DESIGN 已改注"延后（P4/P6）"
-- 代码 4,188 行（源码 1,969 / 测试 2,217），18 笔提交；直接依赖 6 个（cobra/bubbletea/bubbles/lipgloss/yaml.v3/openai-go）
-- 记录：`output-2..6_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 2.7 已收口（分两笔提交）：
+  - `internal/agentcore`（30 + 136，测试 320）：`AgentCore` 接口 + P2 直连实现 `Direct`。**界面不再 import llm.Client**
+  - `repl` 流式：正文增量即渲染、`EventRetry` 提示、`Esc` 保留已生成内容、流意外结束有提示、流式期间拒绝新输入
+  - `main.buildEnv` 装配：配置 → 密钥 → `llm.NewOpenAI` → `systemprompt`（含 `detectShell`，ADR-006）→ `agentcore.Direct`
+- 代码 5,131 行（源码 2,362 / 测试 2,769），20 笔提交；直接依赖 6 个（cobra/bubbletea/bubbles/lipgloss/yaml.v3/openai-go）
+- 记录：`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
-## 下一步第一件事（具体到文件与函数）
+## 下一步第一件事
 
-**P2 单元 2.7 —— REPL 流式渲染 + `Esc` 中断**（`internal/cli/repl/` + `internal/agentcore` 最小桩）：
+**先做人工验收，再开 P3。** 单元 2.7 的代码路径全部有单测，但有三件事只有人能确认：
 
-1. `repl.Deps` 增加 `Core agentcore.AgentCore`（CODE-DESIGN §9 已预留）；`Model` 增加 `streaming`/`buffer` 状态
-2. `waitEvent(ch <-chan llm.StreamEvent) tea.Cmd`：channel → tea.Msg 的桥（CODE-DESIGN §9 已列）
-3. `Update` 处理：`EventText` 追加正文、`EventReasoning` 折叠、`EventRetry` 显示"第 N 次失败，正在重试…"、`EventUsage` 记数、终态收尾
-4. `Esc`：`Interrupt()` → `ctx` 取消 → 流结束但**保留已产出文本**（PRD F-LLM-6）
-5. `agentcore` 这一层暂时只要一个 `Submit(ctx, input) (<-chan llm.StreamEvent, error)` 的最小实现（P3 才接工具循环）
-6. 验收：真实端点下 `sycode` 里输入一句话能流式看到回答；`Esc` 中断后不留半截状态
+1. 真终端里 `sycode` 的观感：标题、流式逐字、输入框位置、`Esc` 后的一行提示是否错位
+2. 真端点流式问答（`OPENAI_API_KEY` 或 `DEEPSEEK_API_KEY` + 可选 `~/.sycode/configs.json` 切供应商）
+3. `Esc` 中断后的实际体验：是否立刻停、已生成内容是否完整保留
 
-**风险**：这一单元要动 `agentcore`，但 `appstate` 还不存在。两个选择——
-（a）先做一个只转发 `llm.Client` 的 `agentcore` 桩，`appstate` 留到 P3；
-（b）本单元只把 `llm.Client` 直接注入 `repl.Deps`，`agentcore` 等 P3 一起建。
-倾向 **(b)**：少一层空壳，`repl` 依赖 `llm.Client` 不违反依赖方向（`cli → llm` 未被禁），
-P3 建 `agentcore` 时再把它插进中间。开工前先确认这一点。
+**P2 退出条件还差一条**：`sycode run "列出当前目录文件"` 能流式返回——headless 入口是 P4，若想现在收掉 P2，
+需要先做最小 `run`（非流式也行：一条消息、读完打印）。这属于范围决策，开工前问人。
 
-## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
+**P3 第一单元建议**：`internal/filesystem`（`NewGuard`/`Check`/`IsBlocked` + `defaultBlockedPaths`），
+它是所有工具的前置，且纯逻辑好测；`tools` 与 `appstate` 都在它后面。
+
+## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
 
 - 工具 shell 的 PATH 被裁剪：`go` 不可见 → 先 `source scripts/env.sh`（不是没装）
 - `go build ./...` 会把 main 包二进制写到当前目录 → `scripts/check.sh` 已改成 `-o <临时目录>/`

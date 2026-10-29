@@ -129,10 +129,12 @@ func TestRootCommand_PassesResolvedModelToREPL(t *testing.T) {
 	// 标题里的模型名来自解析结果，断了这条线界面就会显示空模型。
 	var got string
 	root := NewRootCommand(Options{
-		Version:      "0.1.0",
-		Stdout:       &bytes.Buffer{},
-		Stderr:       &bytes.Buffer{},
-		ResolveModel: func() (string, error) { return "deepseek-chat", nil },
+		Version: "0.1.0",
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		BuildEnv: func() (Env, error) {
+			return Env{Model: "deepseek-chat"}, nil
+		},
 		StartREPL: func(model string) error {
 			got = model
 			return nil
@@ -155,8 +157,8 @@ func TestRootCommand_ResolveFailureSkipsREPL(t *testing.T) {
 		Version: "0.1.0",
 		Stdout:  &bytes.Buffer{},
 		Stderr:  &bytes.Buffer{},
-		ResolveModel: func() (string, error) {
-			return "", errors.New(`缺少密钥：请设置环境变量 OPENAI_API_KEY（供应商 "openai"）`)
+		BuildEnv: func() (Env, error) {
+			return Env{}, errors.New(`缺少密钥：请设置环境变量 OPENAI_API_KEY（供应商 "openai"）`)
 		},
 		StartREPL: func(string) error {
 			entered = true
@@ -188,9 +190,9 @@ func TestRootCommand_VersionDoesNotResolveModel(t *testing.T) {
 		Version: "0.1.0",
 		Stdout:  &bytes.Buffer{},
 		Stderr:  &bytes.Buffer{},
-		ResolveModel: func() (string, error) {
+		BuildEnv: func() (Env, error) {
 			called = true
-			return "", errors.New("不应该被调用")
+			return Env{}, errors.New("不应该被调用")
 		},
 	})
 	root.SetArgs([]string{"--version"})

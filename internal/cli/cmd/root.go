@@ -14,8 +14,17 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/sy665/sycode/internal/agentcore"
 	"github.com/sy665/sycode/internal/cli/repl"
 )
+
+// Env 是进入界面前必须准备好的运行依赖。
+type Env struct {
+	// Model 只用于标题展示。
+	Model string
+	// Core 是界面用的回合引擎；为空时界面只回显（测试可省）。
+	Core agentcore.AgentCore
+}
 
 // Options 注入进程级依赖。输出目标可替换，便于测试断言终端文案。
 type Options struct {
@@ -24,11 +33,11 @@ type Options struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 
-	// ResolveModel 在进入界面之前解析要用的模型名（如 "gpt-4o-mini"），解析失败则不进入界面。
+	// BuildEnv 在进入界面之前准备好模型与回合引擎，失败则不进入界面。
 	//
 	// 之所以交给调用方延迟执行、而不是在 run() 里算好传进来：版本、帮助不需要密钥，
 	// 提前解析会让 `sycode --version` 在没有 key 的机器上直接失败。
-	ResolveModel func() (string, error)
+	BuildEnv func() (Env, error)
 
 	// StartREPL 允许测试替换交互入口，参数是已解析的模型名。为空时走真实界面。
 	// 不这样做的话，"无参数启动"的测试会真的把终端交给 Bubble Tea，在交互式终端里跑 go test 时会挂住。
@@ -91,28 +100,32 @@ func NewRootCommand(opts Options) *cobra.Command {
 	return root
 }
 
-// runREPL 解析模型后进入交互式界面；测试可经 Options.StartREPL 替换界面本身。
+// runREPL 准备好运行环境后进入交互式界面；测试可经 Options.StartREPL 替换界面本身。
 //
-// 解析失败（缺密钥、配置写错）属于"用户需要去动手"，不是用法错误：
+// 准备失败（缺密钥、配置写错）属于"用户需要去动手"，不是用法错误：
 // 原样返回让 main 打一行"错误：…"并退出 1，不进入界面，也不刷用法提示。
 func runREPL(opts Options) error {
-	model, err := resolveModel(opts)
+	env, err := buildEnv(opts)
 	if err != nil {
 		return err
 	}
 	if opts.StartREPL != nil {
-		return opts.StartREPL(model)
+		return opts.StartREPL(env.Model)
 	}
-	return repl.Run(context.Background(), repl.Deps{Version: versionString(opts), Model: model})
+	return repl.Run(context.Background(), repl.Deps{
+		Version: versionString(opts),
+		Model:   env.Model,
+		Core:    env.Core,
+	})
 }
 
-// resolveModel 调用注入的解析器；未注入时按"没有模型"处理，界面照常可用。
+// buildEnv 调用注入的构造函数；未注入时按"没有模型、没有引擎"处理，界面照常可用。
 // 这样只测命令树（帮助、版本、参数错误）时不必构造注册表与配置文件。
-func resolveModel(opts Options) (string, error) {
-	if opts.ResolveModel == nil {
-		return "", nil
+func buildEnv(opts Options) (Env, error) {
+	if opts.BuildEnv == nil {
+		return Env{}, nil
 	}
-	return opts.ResolveModel()
+	return opts.BuildEnv()
 }
 
 // newVersionCmd 提供 `sycode version`，与 `--version` 等价。

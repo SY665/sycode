@@ -91,10 +91,11 @@ run() int
 
 | 元素 | 签名 | 职责 |
 |---|---|---|
-| `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer; ResolveModel func() (string, error); StartREPL func(model string) error }` | 注入版本、输出与模型解析器；后两项是测试替换点 |
+| `Env` | `type Env struct { Model string; Core agentcore.AgentCore }` | 进入界面前要准备好的东西：标题用的模型名 + 回合引擎 |
+| `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer; BuildEnv func() (Env, error); StartREPL func(model string) error }` | 注入版本、输出与环境构造函数；后两项是测试替换点 |
 | `NewRootCommand` | `func NewRootCommand(opts Options) *cobra.Command` | 建 root + `version` + `run` 子命令；同时完成汉化 |
-| `runREPL` | `func runREPL(opts Options) error` | 先解析模型（失败则不进界面、退出 1），再把模型名交给界面 |
-| `resolveModel` | `func resolveModel(opts Options) (string, error)` | 调注入的解析器；未注入视为"没有模型"，只测命令树时不必造配置 |
+| `runREPL` | `func runREPL(opts Options) error` | 先准备环境（失败则不进界面、退出 1），再把模型名与引擎交给界面 |
+| `buildEnv` | `func buildEnv(opts Options) (Env, error)` | 调注入的构造函数；未注入视为"没有模型、没有引擎"，只测命令树时不必造配置 |
 | `newVersionCmd` | `func newVersionCmd(opts Options) *cobra.Command` | 输出 `0.1.0 (build abc1234)` |
 | `newRunCmd` | `func newRunCmd() *cobra.Command` | headless 单回合（P4 实装） |
 | `versionString` | `func versionString(opts Options) string` | 有提交号才带 `(build …)`，避免空括号 |
@@ -427,7 +428,13 @@ type AgentCore interface {
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Deps` | `type Deps struct { Version string; Model string }`（P2 追加 `Core agentcore.AgentCore`、`Store *session.Store`） | 界面只拿展示所需依赖 |
+| `Deps` | `type Deps struct { Version, Model string; Core agentcore.AgentCore; Ctx context.Context }`（P2 已加 `Core`/`Ctx`；`Store` 待 P4） | 界面只拿展示与回合引擎，不碰 `llm.Client` |
+| `submit` | `func (m Model) submit() (tea.Model, tea.Cmd)` | `/exit` 退出；调 `Core.Submit`，成功后进入流式状态并返回 `waitEvent` |
+| `handleStreamEvent` | `func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd)` | 正文累积、`EventRetry` 提示、终态收尾；其余事件 P2 不展示 |
+| `finishTurn` | `func (m Model) finishTurn(err error)` | 正文落历史 → 中断提示 → 错误提示；清流式状态 |
+| `interrupt` | `func (m Model) interrupt()` | `Esc` 调 `Core.Interrupt`，**不立即改状态**：等流自己收尾，避免两处状态不一致 |
+| `context` | `func (m Model) context() context.Context` | 取注入的 ctx，测试不必构造 |
+| `streamEventMsg` / `streamClosedMsg` | 两个消息类型 | 事件与流异常结束进 `Update` 的通道 |
 | `NewModel` | `func NewModel(d Deps) Model` | 只建状态，不做 IO |
 | `Init` | `func (m Model) Init() tea.Cmd` | 输入框聚焦；窗口尺寸由框架发 `WindowSizeMsg` |
 | `Update` | `func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd)` | **唯一**改状态的地方 |

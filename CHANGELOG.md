@@ -5,6 +5,8 @@
 ## [Unreleased]
 
 ### Added
+- **REPL 流式渲染**：`repl.Deps` 接入 `agentcore.AgentCore`，正文增量即渲染；重试显示「第 N 次失败，正在重试…」；`Esc` 中断保留已生成内容；流意外结束（无终态）有提示；流式期间拒绝新输入（避免两股回答缠在一起）
+- **启动装配**：`cmd.Env{Model, Core}` + `Options.BuildEnv`；`main.buildEnv` 把解析结果、`llm.OpenAI` 与系统提示（OS/工作目录/shell/日期）组装成 `agentcore.Direct`
 - `internal/agentcore`：`AgentCore` 接口（`Submit`/`Interrupt`/`Messages`/`Clear`）+ P2 的直连实现 `NewDirect`——界面不再直接碰 `llm.Client`；中断后已产出文本仍入历史（PRD F-LLM-6），请求都发不出去的那次不入历史
 - `internal/llm/retry.go`：`Do` 指数退避重试（`maxRetries=3`、封顶 30s、加抖动且不越界）；`isRetryable` 认 429/5xx/连接失败/流截断，不认 4xx/取消/超时；`partialError` 让"已吐字之后"的失败不再重试
 - `internal/llm/openai.go` 重试接线：重试只发生在 `run`，每次失败发 `EventRetry{Attempt:n}` 供 UI 显示进度
