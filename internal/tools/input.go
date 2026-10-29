@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"math"
+	"strconv"
 )
 
 // 本文件集中"从 Input 里安全取值"的辅助。
@@ -60,6 +61,22 @@ func optionalInt(in Input, field string, def int) (int, error) {
 	return int(value), nil
 }
 
+// requireText 取必填字符串参数，但允许空串。
+//
+// 用于 write_file 的 content：清空一个文件是合法操作，而"没给这个字段"才是错误。
+func requireText(in Input, field string) (string, error) {
+	raw, ok := in[field]
+	if !ok || raw == nil {
+		return "", fmt.Errorf("参数错误：缺少必填字段 %q。请带上 {%s} 重试", field, exampleFor(field))
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("参数错误：字段 %q 必须是字符串，实际是 %s。请带上 {%s} 重试",
+			field, typeName(raw), exampleFor(field))
+	}
+	return value, nil
+}
+
 // optionalString 取可选字符串参数；缺省返回空串。
 func optionalString(in Input, field string) (string, error) {
 	raw, ok := in[field]
@@ -72,6 +89,9 @@ func optionalString(in Input, field string) (string, error) {
 	}
 	return value, nil
 }
+
+// itoa 是 strconv.Itoa 的短别名，用来在提示语里拼数字。
+func itoa(v int) string { return strconv.Itoa(v) }
 
 // typeName 把 Go 类型名换成模型看得懂的英文说法。
 func typeName(v any) string {

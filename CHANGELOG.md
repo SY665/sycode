@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `internal/tools/write_file.go` + `edit_file.go` + `diff.go`：写类工具。**原子写**（同目录临时文件 → Sync → Rename）、写后回读校验、被拒时零副作用、内容未变不碰文件；`edit_file` 只接受唯一匹配（歧义时列出候选行号，0 命中时提示先用 grep）；改动以 `Display{Kind: DisplayDiff}` 呈现
 - `internal/tools/glob.go` + `pattern.go`：`glob` 工具与**自己实现的 glob 匹配**（模式转正则：`*`/`?`/`**`（零层也匹配）/`[abc]`/`[!abc]`，Windows 大小写不敏感）；跳过 `.git` 与被忽略目录，输出字典序（两次调用结果一致）
 - `internal/tools/grep.go`：`grep` 工具（Go 正则、`include` glob 过滤、`路径:行号: 内容`）；跳过二进制、超 4MiB 文件与忽略项；单行上限 256KiB 且超长行不影响后续行号
 - `internal/tools/read_file.go`：`read_file` 工具（分段 `offset`/`limit`、16MiB 上限后建议用 grep、二进制探测、32KiB 截断并提示续读）；**给模型的内容不带行号**（避免行号被写进 `old_string`），行号只进 `Display`

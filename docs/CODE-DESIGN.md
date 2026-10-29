@@ -330,9 +330,42 @@ type PermissionRequester interface {   // 由 UI 实现，注入给工具
 常量：`defaultGrepLimit = 100`、`maxGrepLimit = 500`、`maxGrepFileBytes = 4MiB`、`grepLineBytes = 256KiB`。
 `ctx` 取消 → `超时：搜索被取消`（不让 UI 停在一个永远转圈的搜索上）。
 
+### `write_file.go`
+
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `NewWriteFileTool` | `func NewWriteFileTool(guard *filesystem.Guard, perm PermissionRequester) *WriteFileTool` | |
+| `Execute` | 校验 → 问写权限 → Resolve → 读现状 → 写 → 回读校验 | **被拒绝时一个字节都不动**（先问再做，顺序不能反） |
+| `readExisting` | `func readExisting(path string) (content string, existed bool, err error)` | 不存在返回 `existed=false`；目录、二进制文件拒绝覆盖（覆盖二进制几乎一定是误操作） |
+| `writeFileAtomic` | `func writeFileAtomic(path string, data []byte) error` | 同目录临时文件 → `Write` → `Sync` → `Chmod 0644` → `Rename`。**同目录**是必须的：跨文件系统 rename 不原子 |
+| `writeAndVerify` | `func writeAndVerify(path, content, displayPath string) error` | 原子写 + 回读比对：磁盘满、被别的进程截断不会从 `Write` 返回，用户却会拿到"写着成功、其实是坏的"文件 |
+| `renderWriteSummary` | 私有 | 给模型的一句话结果（新建/覆盖、字节、行数、diff 摘要） |
+
+**内容未变化时不写盘**：改一次 mtime 会让 watch 与构建白跑一遍。
+
 ### `edit_file.go` 的额外约定
 
-`Execute` 内部必须走三段：`locateMatches(content, old) ([]int, error)`（0 或 >1 直接失败并返回候选行号）→ `applyReplace(...)` → `buildDiff(old, new) []EditDiffLine`。三个都是私有纯函数，各有单测。
+`Execute` 内部必须走三段：`locateMatches(content, old) []int`（0 或 >1 直接失败并返回候选行号）→ `applyReplace(...)` → `buildDiff(old, new) []EditDiffLine`。三个都是私有纯函数，各有单测。
+
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `locateMatches` | `func locateMatches(content, old string) []int` | 返回每次出现的起始行号（1 起）；超过 `maxMatchReport` 上报上限时末尾追加 `-1` 表示"还有更多" |
+| `applyReplace` | `func applyReplace(content, old, new string) string` | 只替换第一处（调用方已确认唯一） |
+| `summarizeChange` / `joinLines` | 私有 | 弹窗里的"3 行 → 5 行"；候选行号拼成"1、2、3、…" |
+
+**为什么只做唯一匹配**：模型拿着不唯一的 `old_string` 去改，改错地方的代价远大于让它重写一次。
+0 处的错误提示必须指向下一步（"先用 grep 确认原文"），否则模型只会原样重试。
+
+### `diff.go`（展示用差异）
+
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `buildDiff` | `func buildDiff(oldText, newText string) []EditDiffLine` | 掐掉公共前后缀，中间整块标 `-`/`+`；保留一行上下文 |
+| `formatDiff` | `func formatDiff(diff []EditDiffLine) []string` | 转成 `+`/`-`/空格前缀的行；超过 `maxDiffLines=200` 截断并注明 |
+| `diffSummary` | `func diffSummary(diff []EditDiffLine) string` | `+2 / -1` 这样的一句话摘要 |
+
+**没有引 diff 库，也没有写 LCS**：这里只有"改动前后"一种场景，掐前后缀足够，且它绝不会骗人
+（不会把改过的说成没改）。真需要细粒度对齐时再换，换的成本被 `Display` 挡住了。
 
 ### `bash.go` 的额外约定
 

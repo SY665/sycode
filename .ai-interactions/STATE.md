@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 21:20 | 阶段：**P3** | 当前单元：3.3 已完成，下一单元 3.4（`write_file` / `edit_file`）
+更新时间：2026-10-29 21:35 | 阶段：**P3** | 当前单元：3.4 已完成，下一单元 3.5（`bash`）
 
 ## 已完成（本阶段）
 
@@ -57,23 +57,34 @@
   - `input.go` 不用裸类型断言（`Execute` 永不 panic）；`permission.go` 是三态 → 文案的唯一映射点
   - `pattern.go`：**glob 模式转正则**（`**/` 与尾部 `/**` 都匹配零层，Windows 加 `(?i)`）；不支持 `{a,b}`
   - `glob`/`grep`：跳过 `.git` 与被忽略目录、起点只问一次权限、限量与截断提示；`grep` 单行上限 256KiB 且不破坏后续行号
-- 代码 8,460 行（源码 4,194 / 测试 4,266），24 笔提交；直接依赖 7 个
-- 记录：`output-1..3_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 3.4 已收口（`write_file` 213 + `edit_file` 190 + `diff` 97，测试 377）：
+  - **原子写**：同目录临时文件 → Write → **Sync** → Chmod → Rename；失败路径清临时文件；写后**回读校验**
+  - **先问权限再动盘**：拒绝时零副作用（有测试断言"磁盘上什么都不存在"）；内容未变不碰 mtime
+  - `edit_file` 只接受唯一匹配：歧义列候选行号（≤5 + 省略号），0 命中提示"先用 grep 确认"
+  - `diff.go`：掐公共前后缀的逐行 diff（不引库、不写 LCS），进 `Display{Kind: DisplayDiff}`
+- 代码 9,357 行（源码 4,714 / 测试 4,643），25 笔提交；直接依赖 7 个
+- 记录：`output-1..4_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P3 单元 3.4 —— `write_file` / `edit_file`**（2 个工具文件 + diff 生成）：
+**P3 单元 3.5 —— `bash` 工具**（`bash.go` + `shell.go`，2 个文件）：
 
-1. `write_file.go`：`NewWriteFileTool(guard, perm)`；`path` + `content`；`Execute` 走 `OpWrite`（工作目录内是 `Pending` → 必须问）；写之前 `MkdirAll` 父目录；**写后回读校验**（避免部分写入却报告成功）
-2. `edit_file.go`：`old_string`/`new_string` 精确替换。按 CODE-DESIGN §4：
-   `locateMatches(content, old) ([]int, error)`（0 或 >1 直接失败并给候选行号）→ `applyReplace` → `buildDiff(old, new) []EditDiffLine`
-3. diff：`Display{Kind: DisplayDiff}`；**不引第三方 diff 库**——现在只需要"逐行对比 + 上下文"，先用朴素 LCS 或前后缀裁剪（选型表里的 `go-udiff` 留给 3.7 的界面渲染，届时若真的需要再讨论）
-4. 验收：歧义匹配（出现两次）失败并列出候选行号；`old_string` 不存在 → `执行失败：` + 提示用 grep 确认；写操作**副作用为零**当权限被拒
+1. `shell.go`：`resolveShell() (Shell, error)` —— ADR-006 顺序：`SYCODE_SHELL` → `bash.exe` → PowerShell → `cmd.exe`；
+   **把 `main.detectShell` 改成调这里**（消除重复，两处结论必须一致）
+2. `bash.go`：`NewBashTool(guard, perm)`；`command` + 可选 `timeout`；`Execute` 走 `OpExec`
+   （工作目录内是 `Pending` → 必须问；`Detail` 要带上命令本身，用户要看清在跑什么）
+3. `isDangerous(cmd string) bool`：模式表（`rm -rf`、`git reset --hard`、`curl|sh`…）——
+   危险命令即使被允许，也要在 `Detail` 里明确标出
+4. `truncateOutput(out []byte) (inline, artifact string)`：超过 32KiB 写进 `~/.sycode/bash/…`，
+   `Result.Artifact` 给路径，`Content` 给"已落盘"提示
+5. 超时：默认 120s、上限 600s；超时后**杀掉整个进程树**（Windows 要 `taskkill /T`，
+   否则 `go build` 的子进程会活着）
+6. 验收：`go build ./...` 能跑通；超时被杀；长输出落盘且能读回；危险命令的 Detail 有标注
 
-**注意**：写操作是第一次真正"改用户的文件"，因此 `Pending → 允许` 这条路径必须有测试；
-另外 `edit_file` 的原子性：先写临时文件再 `Rename`，避免写一半断电留下半截源码。
+**注意**：`filesystem.bashOutputDir()` 已存在（`NewGuard` 用它做"可读不可写"例外），
+落盘时**不要**再拼一次路径——从 `filesystem` 拿，避免两处不一致。
 
-## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
+## 已知坑 / 需要绕过的东西
 
 - 工具 shell 的 PATH 被裁剪：`go` 不可见 → 先 `source scripts/env.sh`（不是没装）
 - `go build ./...` 会把 main 包二进制写到当前目录 → `scripts/check.sh` 已改成 `-o <临时目录>/`

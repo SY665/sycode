@@ -76,7 +76,7 @@
 | 3.1 | `filesystem.Guard` + `GitAwareness` | ✅ 策略表 8 种场景全测；符号链接穿越（含「父目录是链接、目标还不存在」）用可替换解析器覆盖——Windows 默认不给建真链接；`work2` vs `work` 前缀陷阱有回归 |
 | 3.2 | `tools.Registry` + schema 导出 | ✅ nil/空名/重名报错且不改表；`All`/`Schemas` 与注册顺序一致；`Schemas` 返回副本（外部改写不污染工具 schema）；`clip` 按 rune 收尾并切在行边界 |
 | 3.3 | `read_file` / `glob` / `grep` | ✅ 分段读 + 二进制探测 + 16MiB 上限；`**` 自己实现（模式转正则，零层也匹配）；include 过滤、忽略项与 `.git` 跳过、限量与截断提示；三类工具共用一条权限通道 |
-| 3.4 | `write_file` / `edit_file` | diff 产生；歧义匹配失败并列候选行号 |
+| 3.4 | `write_file` / `edit_file` | ✅ 原子写（同目录临时文件 + Sync + Rename）与回读校验；拒绝时副作用为零；内容未变不碰文件；`edit_file` 唯一匹配、歧义列候选行号、0 命中提示用 grep；diff 进 `Display` |
 | 3.5 | `bash` | 超时、输出落盘、危险命令确认、Windows shell 选择（ADR-006） |
 | 3.6 | `appstate` 工具循环（`agentcore` 装配工具） | 多轮调用、25 轮上限、连续失败提示换策略 |
 | 3.7 | 权限弹窗 | 允许一次 / 本会话总是允许 / 拒绝；拒绝时副作用为零 |
