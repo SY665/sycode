@@ -178,3 +178,38 @@ func TestLoadFile_YAMLSyntaxError(t *testing.T) {
 		t.Errorf("错误信息应说明是解析失败：%v", err)
 	}
 }
+
+func TestGetModelContextWindow(t *testing.T) {
+	registry, err := Load()
+	if err != nil {
+		t.Fatalf("加载内置注册表失败：%v", err)
+	}
+
+	provider, model, ok := registry.Find("openai", "gpt-4o-mini")
+	if !ok {
+		t.Fatal("内置注册表里应有 openai/gpt-4o-mini")
+	}
+	window, known := registry.GetModelContextWindow(provider.ID, model.ID)
+	if !known {
+		t.Fatal("内置模型应填了上下文窗口")
+	}
+	if window <= 0 {
+		t.Errorf("窗口应为正数，实际 %d", window)
+	}
+
+	// 未知模型不能编一个数出来：界面上把未知当 0% 比不显示更误导。
+	if _, known := registry.GetModelContextWindow("openai", "不存在的模型"); known {
+		t.Error("未知模型应报未知")
+	}
+}
+
+func TestGetModelContextWindowWithoutValue(t *testing.T) {
+	registry := &Registry{Providers: []Provider{{
+		ID:     "test",
+		Models: []Model{{ID: "no-window"}},
+	}}}
+
+	if _, known := registry.GetModelContextWindow("test", "no-window"); known {
+		t.Error("没填窗口的模型应报未知，而不是当成 0 已知")
+	}
+}

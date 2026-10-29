@@ -84,6 +84,12 @@ func (s *State) runTurn(ctx context.Context, input string, out chan<- llm.Stream
 			return
 		}
 		if len(calls) == 0 {
+			// 把 provider 上报的用量单独发一条：界面要用它显示"上下文占用"。
+			// `llm` 只定义了 EventUsage 却没人发——provider 的 usage 是随 done 一起回来的，
+			// 由这里补一条，界面就不必为了一个数字去调引擎的新方法。
+			if usage != nil {
+				emit(ctx, out, llm.StreamEvent{Type: llm.EventUsage, Usage: usage})
+			}
 			emit(ctx, out, llm.StreamEvent{Type: llm.EventDone, Usage: usage})
 			return
 		}

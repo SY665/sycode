@@ -91,7 +91,7 @@ run() int
 
 | 元素 | 签名 | 职责 |
 |---|---|---|
-| `Env` | `type Env struct { Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; History []agentcore.Turn; RestoredNote string }` | 进入界面前要准备好的东西：模型名、回合引擎、权限通路、恢复出来的历史（屏幕用；上下文由 `Core.Restore` 自己恢复） |
+| `Env` | `type Env struct { Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; History []agentcore.Turn; RestoredNote string; ContextBase, ContextWindow int }` | 进入界面前要准备好的东西：模型名、回合引擎、权限通路、恢复出来的历史（屏幕用；上下文由 `Core.Restore` 自己恢复）、`/context` 的两个常量 |
 | `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer; BuildEnv func(newSession bool) (Env, error); StartREPL func(model string) error }` | 注入版本、输出与环境构造函数；`BuildEnv` 的参数是 `--new`（P4.2 起） |
 | `NewRootCommand` | `func NewRootCommand(opts Options) *cobra.Command` | 建 root + `version` + `run` 子命令、注册 `--new`；同时完成汉化 |
 | `runREPL` | `func runREPL(opts Options, newSession bool) error` | 先准备环境（失败则不进界面、退出 1），再把模型名、引擎、历史交给界面 |
@@ -147,6 +147,7 @@ run() int
 | `Load` | `func Load() (*Registry, error)` | `//go:embed registry.yaml` → 解析 + 校验 |
 | `LoadFile` | `func LoadFile(r io.Reader) (*Registry, error)` | 任意来源解析，供测试与将来的自定义注册表；`Load` 也走它 |
 | `Find` | `func (r *Registry) Find(providerID, modelID string) (Provider, Model, bool)` | 找不到返回 `false`；供应商命中但模型没命中时**仍返回该 Provider**，调用方据此区分"供应商错"还是"模型错" |
+| `GetModelContextWindow` | `func (r *Registry) GetModelContextWindow(providerID, modelID string) (int, bool)` | 第二个返回值是**是否已知**：没填或非正数一律报未知，绝不编默认值（界面上把未知当 0% 比不显示更误导） |
 | `Default` | `func (r *Registry) Default() (providerID, modelID string)` | 首次运行的兜底 |
 | `FirstModel` | `func (r *Registry) FirstModel(providerID string) string` | 该供应商的第一个模型；供应商不存在返回空串。供"只指定了供应商"的场合使用，避免沿用别家的 `defaults.model` |
 | `parse` / `validate` | 私有 | YAML 解析与自洽性校验（id 唯一、`context_window > 0`、默认值必须存在） |
@@ -499,11 +500,18 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 **为什么"吐字后不重试"要单独一个类型**：流式回答无法撤回，重试会让用户看到重复内容。
 判定点放在 `openai.run`——它是唯一知道"这次尝试有没有 `emitted`"的地方（见 `pumpOutcome`）。
 
-### `estimate.go`（延后）
+### `estimate.go`
 
-`Estimate` / `EstimateMessages` 推迟到真正有消费方时再做（P4 上下文预算 / P6 压缩）：
-现在写只有测试会调用它，属于"新增导出却没人用"（§13 检查清单）。
-消费方出现时按原计划实现：按 字节/3 粗估，注释必须写明是估算、不得用于硬裁剪。
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `EstimateTokens` | `func EstimateTokens(text string) int` | 字节/3 粗估，空串 0、非空至少 1 |
+| `EstimateJSON` | `func EstimateJSON(v any) int` | 序列化后按同一口径估；序列化失败记 0（展示用的数字不该让人报错） |
+
+口径是**字节/3**：中文一个字 3 字节 → 一个字约一 token，接近主流分词器；英文 4 字节 1 token → 高估约四分之一。
+高估比低估安全，它只会让"快满了"的提醒来得早一点。
+
+**估算只用于给人看的占用提示，不参与请求构造**（硬裁剪由 provider 决定）。消费方：`/context`（P4.4）；
+P6 的压缩阈值也会用它，届时同口径。常见实现做法一致（`chars/3 heuristic`，并在界面上注明是估的）。
 
 ## 6. 会话层 `internal/session/`
 
@@ -624,7 +632,7 @@ type AgentCore interface {
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Deps` | `type Deps struct { Version, Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; History []agentcore.Turn; Restored string; Ctx context.Context }`（P4.2 加 `History`/`Restored`；`Store` 不必给界面，落盘在 `appstate`） | 界面只拿展示、回合引擎、权限通路与历史 |
+| `Deps` | `type Deps struct { Version, Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; History []agentcore.Turn; Restored string; ContextBase, ContextWindow int; Ctx context.Context }`（P4.4 加 `ContextBase`/`ContextWindow`） | 界面只拿展示、回合引擎、权限通路、历史与上下文常量 |
 | `NewModel` | `func NewModel(d Deps) Model` | 建状态并把 `History` 落进记录：**恢复说明在最上、分隔线在最下**，否则用户会把旧内容当成刚发生的 |
 | `submit` | `func (m Model) submit() (tea.Model, tea.Cmd)` | `/exit` 退出；调 `Core.Submit`，成功后进入流式状态并返回 `waitEvent` |
 | `handleStreamEvent` | `func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd)` | 正文累积、`EventRetry` 提示、`EventToolResult` 落成摘要 + 展示块、终态收尾；`tool_start`/`usage` 不渲染 |
@@ -654,6 +662,7 @@ type AgentCore interface {
 | `output` | `func (o *Output) Push(s Segment)`、`func (o *Output) Render(width int) string` |
 | `markdown` | `func Render(src string, width int, th theme.Theme) string` |
 | `permissions` | 暂未单独成包：弹窗状态只有 `Model.pending` 一个字段，拆包要多一层转发；功能长大（选择器、批量授权）时再按常见实现拆出 `requester.go`/`selector.go` |
+| `context_status.go` 的对应物 | `context.go`：`contextUsage`/`contextUsageFor`/`renderContext`/`formatTokens`/`padLabel`。分类明细由界面用 `Core.Messages()` 算，不像常见实现那样在引擎里暴露 `GetContextBreakdown`——那三个数只有界面要用 |
 | `widgets` | 每个组件 `NewXxx(...) Model` + `Update` + `View` |
 | `commands` | `func Register(c Command)`、`func Lookup(name string) (Command, bool)` |
 

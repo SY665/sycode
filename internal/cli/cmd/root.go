@@ -32,6 +32,10 @@ type Env struct {
 	History []agentcore.Turn
 	// RestoredNote 是标题下那行说明，例如「已恢复 20261029-201835-0b30（3 轮）」，空串表示新会话。
 	RestoredNote string
+	// ContextBase 是系统提示与工具定义的 token 估算；ContextWindow 是模型的上下文窗口（0 = 未知）。
+	// 两者都只用于 /context 的显示，界面不再自己推算固定开销。
+	ContextBase   int
+	ContextWindow int
 }
 
 // Options 注入进程级依赖。输出目标可替换，便于测试断言终端文案。
@@ -128,12 +132,14 @@ func runREPL(opts Options, newSession bool) error {
 		return opts.StartREPL(env.Model)
 	}
 	return repl.Run(context.Background(), repl.Deps{
-		Version:    versionString(opts),
-		Model:      env.Model,
-		Core:       env.Core,
-		Permission: env.Permission,
-		History:    env.History,
-		Restored:   env.RestoredNote,
+		Version:       versionString(opts),
+		Model:         env.Model,
+		Core:          env.Core,
+		Permission:    env.Permission,
+		History:       env.History,
+		Restored:      env.RestoredNote,
+		ContextBase:   env.ContextBase,
+		ContextWindow: env.ContextWindow,
 	})
 }
 

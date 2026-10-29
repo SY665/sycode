@@ -58,6 +58,12 @@ type Deps struct {
 	// Restored 是标题下那行说明（会话 ID 与轮数）；空串表示新会话。
 	Restored string
 
+	// ContextBase 是系统提示与工具定义占用的估算 token，装配时算好。
+	// 界面不重复算它：这部分在一次运行里不变，而它可能有几千字。
+	ContextBase int
+	// ContextWindow 是模型的上下文窗口；0 表示未知（界面显示"上限未知"而不是 0%）。
+	ContextWindow int
+
 	// Ctx 由 Run 注入，供 Submit 使用；为空时退回 Background。
 	Ctx context.Context
 }
@@ -81,6 +87,10 @@ type Model struct {
 
 	// pending 是正在等用户作答的权限询问；非空即"弹窗模态"，输入暂停。
 	pending *agentcore.PermissionRequest
+
+	// lastPromptTokens 是供应商上报的输入 token（最近一次）；0 表示还没收到过。
+	// /context 优先用它，因为它是唯一"不是猜的"数字。
+	lastPromptTokens int
 }
 
 // NewModel 构造初始状态，不做任何 IO。
@@ -196,6 +206,10 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
+	if text == "/context" {
+		m.append(m.renderContext(m.contextUsageFor()))
+		return m, nil
+	}
 
 	m.append("› " + text)
 
@@ -251,6 +265,12 @@ func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 	case llm.EventRetry:
 		// 用户看不到后台在干什么，必须显式告知，否则会以为卡死。
 		m.retryNote = fmt.Sprintf("第 %d 次失败，正在重试…", ev.Attempt)
+
+	case llm.EventUsage:
+		// 唯一"不是猜的"数字：供应商报的输入 token，/context 用它算百分比。
+		if ev.Usage != nil && ev.Usage.PromptTokens > 0 {
+			m.lastPromptTokens = ev.Usage.PromptTokens
+		}
 
 	case llm.EventDone, llm.EventError:
 		return m.finishTurn(ev.Err)

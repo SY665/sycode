@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **`/context`**（P4.4）：分类明细（系统提示与工具 / 用户消息 / 助手回复 / 工具结果）+ 合计 `≈12.3k / 128k（9.6%）`。**窗口未知时显示"上限未知"而不是 0%**；有供应商上报的 `PromptTokens` 时以它为准并标注"（供应商上报）"，否则标注"（估算）"。`llm.EstimateTokens`（字节/3，中文一字约一 token）、`providers.GetModelContextWindow`（返回是否已知，不编默认值）、`appstate` 在终态前补发 `EventUsage`（此前 `EventUsage` 有定义但没有生产者）
 - **会话恢复**（P4.2 后半）：启动默认续上本工作目录的上一次会话，`--new` 强制新建。`Store.Open` 重开已有会话并把序号从最后一条有效事件续上；`appstate.Restore` 把投影灌回上下文（**只放正文**：tool 消息必须挂在带 id 的 `tool_calls` 后面，而库里只有摘要）；界面把恢复的历史画出来，并加一行 `已恢复 <ID>（N 轮）` 与 `—— 以上是上次会话 ——` 分隔。任一步失败都降级为"本次不落盘"或"改为新建"，不拒绝启动
 - **回合落库**（P4.2 前半）：`appstate.runTurn` 在回合开始写 `user_message`、结束时写 `assistant_turn`（正文 + 这一轮的工具摘要，只存摘要首行）。`defer` 落库，所以正常结束、出错、`Esc` 中断都会留下已经说过的话；一个字都没产出的空回合不写。**写失败只 `slog.Warn`**——存不下历史不该让对话中断。`agentcore.NewWithSession` 负责装配（`New` 保持不落盘），`main.openSession` 在建库失败时降级为"本次不落盘"而不是拒绝启动
 - `internal/session` 投影（P4.3）：`BuildTurns` 把事件流还原成中立的 `Turn{User, Assistant, Tools}`。`user_message` 开一轮、其后 `assistant_turn` 填入；同一轮里模型中途说的多段话用空行连接（工具循环会产生多条，覆盖会丢内容）；没有 user 打头的回答单独成轮而不是丢弃；`session_started`/未知类型/坏载荷跳过（老版本写的会话要能被新版本读出来）

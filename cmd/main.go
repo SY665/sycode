@@ -158,20 +158,45 @@ func buildEnv(newSession bool) (cmd.Env, error) {
 	// 会话：默认续上本工作目录的上一次，--new 则新建。
 	store, sess, history, note := openSession(workDir, newSession)
 
-	core := agentcore.NewWithSession(client, writeRegistry, guard, perm,
-		llm.Build(promptEnv(resolved.ModelID, workDir)), store, sess)
+	// 系统提示只拼一次：它同时要交给引擎、还要用来估算固定开销。
+	system := llm.Build(promptEnv(resolved.ModelID, workDir))
+
+	core := agentcore.NewWithSession(client, writeRegistry, guard, perm, system, store, sess)
 	if len(history) > 0 {
 		// 上下文由引擎自己恢复；界面拿到的 history 只用来把屏幕填上。
 		core.Restore(history)
 	}
 
+	// 窗口未知就给 0，界面显示"上限未知"而不是 0%——注册表里没填的模型是存在的。
+	contextWindow, ok := registry.GetModelContextWindow(resolved.ProviderID, resolved.ModelID)
+	base := baseContextTokens(system, writeRegistry)
+	slog.Debug("上下文占用基线", "base_tokens", base, "window", contextWindow, "window_known", ok)
+
 	return cmd.Env{
-		Model:        resolved.ModelID,
-		Core:         core,
-		Permission:   perm,
-		History:      history,
-		RestoredNote: note,
+		Model:         resolved.ModelID,
+		Core:          core,
+		Permission:    perm,
+		History:       history,
+		RestoredNote:  note,
+		ContextBase:   base,
+		ContextWindow: contextWindow,
 	}, nil
+}
+
+// baseContextTokens 估算"每轮都在、但不属于任何一条消息"的那部分开销：
+// 系统提示 + 每个工具的说明与 schema。
+//
+// 算一次传下去，界面不重算：这部分在一次运行里不变，而它可能是几千 token。
+func baseContextTokens(system string, registry *tools.Registry) int {
+	total := llm.EstimateTokens(system)
+	if registry == nil {
+		return total
+	}
+	for _, schema := range registry.Schemas() {
+		total += llm.EstimateTokens(schema.Name) + llm.EstimateTokens(schema.Description) +
+			llm.EstimateJSON(schema.Input)
+	}
+	return total
 }
 
 // openSession 打开会话库并决定"接着上次"还是"新建"。

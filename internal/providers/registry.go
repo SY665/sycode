@@ -104,6 +104,18 @@ func (r *Registry) FirstModel(providerID string) string {
 	return ""
 }
 
+// GetModelContextWindow 返回模型的上下文窗口（token）。
+//
+// 第二个返回值是"是否已知"。没填或填了非正数就报未知，绝不编一个默认值：
+// 界面上把未知当成 0% 会让人误以为还有很多空间，那比不显示更误导。
+func (r *Registry) GetModelContextWindow(providerID, modelID string) (int, bool) {
+	_, model, ok := r.Find(providerID, modelID)
+	if !ok || model.ContextWindow <= 0 {
+		return 0, false
+	}
+	return model.ContextWindow, true
+}
+
 // parse 解析并校验。校验失败一律返回错误而不是静默忽略：
 // 注册表是手改文件，写错字段名时最需要的是立刻报错。
 func parse(data []byte) (*Registry, error) {

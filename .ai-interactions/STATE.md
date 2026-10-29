@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 24:30 | 阶段：**P4** | 当前单元：4.1/4.2/4.3 全部收口，下一单元 4.4（`/context` 占用）
+更新时间：2026-10-29 24:55 | 阶段：**P4** | 当前单元：4.1–4.4 全部收口，下一单元 4.5（`/clear`、`/sessions`、`/help`）
 
 ## 已完成（本阶段）
 
@@ -134,26 +134,37 @@
   - `cmd.Options.BuildEnv` 加参数 `newSession bool`（`--new`）；`Env` 加 `History`/`RestoredNote`
   - `repl.NewModel` 把历史落进记录：**说明在最上、分隔线在最下**（反了用户会把旧内容当刚发生的）
   - 端到端验过：第二次启动 `已恢复会话 turns=1` 且会话目录不增加；`--new` 后会话数 1→2
-- 代码 13,526 行（源码 6,801 / 测试 6,725），36 笔提交；直接依赖 7 个
-- 记录：`output-1..4_impl-*.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 4.4 已收口（`llm/estimate.go` 38 + `repl/context.go` 130，测试 +190；`registry.go` +12、`turn.go` +7、`main.go` +25）
+  - 双标志（已知窗口 / 已知 token）：窗口未知显示 `N/A` 而不是 0%；当前 token 优先用 provider 上报值，
+    没有才 chars/3 估算并**在界面上注明**
+  - **纠正一处我没查清就下的结论**：`providers.Model` 早在 2.1 就有 `context_window` 字段、`registry.yaml` 也填好了
+    （128k/128k/64k/8k），**不需要改数据契约**。只差 `GetModelContextWindow` 与消费方
+  - `GetModelContextWindow` 返回 `(int, bool)`：没填或非正数报**未知**，绝不编默认值
+  - `llm.EstimateTokens` = 字节/3（中文一字约一 token，英文高估 25%，高估比低估安全）；`EstimateJSON` 序列化失败记 0
+  - `appstate` 在终态前补发 `EventUsage`——`llm` 早就定义了这个类型却没有生产者；界面由此拿到唯一"不是猜的"数字，
+    **不必为它扩 `AgentCore` 接口**（常见实现是把 `GetLastUsage` 放进接口的）
+  - 分类明细由界面用 `Core.Messages()` 算，不像常见实现那样在引擎里暴露 `GetContextBreakdown`（只有界面要用）
+  - 固定开销（系统提示 + 6 个工具 schema）在装配时算一次传下去：冒烟实测 **2795 token / 128k**
+- 代码 14,031 行（源码 7,043 / 测试 6,988），37 笔提交；直接依赖 7 个
+- 记录：`output-1..5_impl-*.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P4 单元 4.4 —— `/context` 占用显示**（`repl` 的斜杠命令 + `llm` 的量算）
+**P4 单元 4.5 —— `/clear`、`/sessions`、`/help`**（`repl`，纯 UI + 一条清库路径）
 
-1. 先定"估算"还是"精确"：v0.1 **估算**（字符数 / 3 ≈ token），标注成 `≈`；
-   `llm/estimate.go` 的 `Estimate` 目前空着（P2 主动延后），这一单元把它补上
-2. `repl` 需要斜杠命令的分发点：目前只有 `submit` 里的 `/exit` 特判。按 `CODE-DESIGN` §9 的
-   `commands` 子包计划，**先别建包**——两条命令而已，在 `repl.go` 里加一个 `handleCommand(text) bool`
-   就够；到 4.5 有四五条命令时再抽 `commands/`
-3. `/context` 输出：`历史 N 条 · 约 X / Y token（Z%）`，`Y` 来自模型的上下文窗口（注册表里要加字段，
-   那是改 `registry.yaml` 的 schema，**先问人**）。若不想动注册表，先只显示 `已用 ≈X token（不含窗口上限）`
-4. 验收：连问三轮 → `/context` 的数字随之变大；`/clear` 之后归零
+1. 先抽命令表：`repl.go` 里已有 `/exit`、`/context` 两个字符串判断，再加三条就该有注册表了
+   （`CODE-DESIGN` §9 的 `commands` 子包）。v0.1 只需要 `type command struct{ name, help string; run func(Model) (tea.Model, tea.Cmd) }`
+   加一个切片，别做成插件系统
+2. `/clear`：`Core.Clear()` + 清 `m.transcript` + 清 `m.lastPromptTokens`。
+   **会话文件不截断**（只追加），所以清空后历史里会出现"空档"——要在记录里说一句"已清空上下文（会话记录保留）"
+3. `/sessions`：调 `Store.List()` 列出本目录会话（ID / 轮数 / 标题 / 更新时间）。
+   但 `repl` 没有 `Store` —— **两条路**：给 `Deps` 传 `*session.Store`（界面直接读存储，破了"界面不碰存储"的分层），
+   或在 `agentcore` 加只读方法（扩接口）。**这一条开工前问人**，我倾向后者加一个 `Sessions() []SessionInfo`，
+   顺便把"0 轮的空会话"过滤掉
+4. `/help`：把命令表自己渲染出来，顺带提一句 `Esc` / `Ctrl+C` 的行为
+5. 验收：五条命令都能用；`/help` 列出的与真实存在的一致（从同一张表来，写死两份必然漂移）
 
-**这一格的真正难点不是代码，是"要不要动注册表"**：`providers.Model` 现在没有上下文窗口字段。
-想显示百分比就必须加，属改数据契约（例外 1），开工前问一句。
-
-**别顺手做**：`/sessions` 选择器（4.5）、压缩（P6）。
+**别顺手做**：会话切换（`/sessions` 只列不切，切换要先定"切了之后当前回合怎么办"）、`/compact`（P6）。
 
 ## 已知坑 / 需要绕过的东西
 

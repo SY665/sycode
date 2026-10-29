@@ -825,3 +825,51 @@ func TestRestoreKeepsUserOnlyTurn(t *testing.T) {
 		t.Fatalf("应只有一条用户消息：%+v", msgs)
 	}
 }
+
+func TestDoneTurnEmitsUsage(t *testing.T) {
+	// provider 的 usage 是随 done 回来的；界面要显示上下文占用就得有人把它单独发一条。
+	usage := &llm.Usage{PromptTokens: 120, CompletionTokens: 30, TotalTokens: 150}
+	client := &fakeClient{turns: []func(context.Context) (<-chan llm.StreamEvent, error){
+		scripted(
+			llm.StreamEvent{Type: llm.EventText, Text: "答"},
+			llm.StreamEvent{Type: llm.EventDone, Usage: usage},
+		),
+	}}
+	state := New(Deps{Client: client, Tools: tools.NewRegistry(), System: "你是 SyCode。"})
+
+	events := collect(t, mustSubmit(t, state, "问"))
+
+	var seen *llm.Usage
+	for _, ev := range events {
+		if ev.Type == llm.EventUsage {
+			seen = ev.Usage
+		}
+	}
+	if seen == nil {
+		t.Fatal("正常结束的回合应补发一条 usage 事件")
+	}
+	if seen.PromptTokens != 120 {
+		t.Errorf("usage 不符：%+v", seen)
+	}
+	// usage 必须在终态之前：界面收到 done 就收尾了，之后再来的数字没人接。
+	if last := events[len(events)-2]; last.Type != llm.EventUsage {
+		t.Errorf("usage 应紧邻终态之前，实际倒数第二条是 %q", last.Type)
+	}
+}
+
+func TestDoneTurnWithoutUsageEmitsNothing(t *testing.T) {
+	// 有些端点不返回 usage：那就什么也不发，界面退回估算，而不是显示 0。
+	client := &fakeClient{turns: []func(context.Context) (<-chan llm.StreamEvent, error){
+		scripted(
+			llm.StreamEvent{Type: llm.EventText, Text: "答"},
+			llm.StreamEvent{Type: llm.EventDone},
+		),
+	}}
+	state := New(Deps{Client: client, Tools: tools.NewRegistry(), System: "你是 SyCode。"})
+
+	for _, ev := range collect(t, mustSubmit(t, state, "问")) {
+		if ev.Type == llm.EventUsage {
+			t.Fatalf("没有 usage 时不该发空事件：%+v", ev)
+		}
+	}
+}
