@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 22:15 | 阶段：**P4** | 当前单元：P3 全部收口（3.1–3.8），下一单元 4.1（`session.Store`）
+更新时间：2026-10-29 23:05 | 阶段：**P4** | 当前单元：4.1 已完成，下一单元 4.3（`projection.go`）→ 再做 4.2 接线
 
 ## 已完成（本阶段）
 
@@ -102,29 +102,48 @@
   - 真二进制验过：8 天前的被删、1 分钟前的保留、日志 `已清理过期的工具输出 count=1`
   - `logs`/`sessions` 回收**故意没接**：前者路径还在 `logging` 私有函数里，后者 P4 才有格式
 - **P3 全部收口**（3.1–3.8）
-- 代码 11,990 行（源码 5,973 / 测试 6,017），31 笔提交；直接依赖 7 个
-- 记录：`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 4.1 已收口（`session/event.go` 98 + `path.go` 85 + `store.go` 357，测试 311）：
+  - **只追加**：`Session.append` 是唯一写入路径，`Seq` 与零值 `TS` 在那里补（两处赋序号早晚重复）
+  - **坏行只计数不报错**：半截 JSON、`seq=0`、超 8MiB 都算坏行，空行不算；一个坏文件不能让会话整个打不开
+  - **上一进程死在半行**：`ensureTrailingNewline` 先补换行再写，否则新事件拼在半截 JSON 后 → 一条坏行变两条
+  - 命名空间 = 目录名（sanitize 到 32 字符，全中文时退回 `root`）+ `-` + 路径 sha1 前 10 位；
+    `normalizeWorkDir` 绝对化 + Clean，Windows 折小写（否则同一目录的历史会分裂成两份）
+  - `Session` **不持有句柄**（每次 Append open-write-close）；`NewStore` 不建目录（只读操作不该留空目录）
+  - **不写 `index.json`**：`List` 扫目录读文件得摘要。两处维护索引必然不一致
+  - `SessionStarted` 只存 `work_dir`；版本/模型属于"这次运行"而非"这段对话"
+  - **规模超限，如实记**：源码 540 行 > 300 行上限。`store.go` 里挤了 4 个入口 + 3 个辅助；
+    若复核认为必须拆，按「写入路径（Create/Append/ensureTrailingNewline）」与「读取路径（Load/List/readEvents/summarize）」拆两笔最自然
+- 代码 12,841 行（源码 6,513 / 测试 6,328），33 笔提交；直接依赖 7 个
+- 记录：`output-1_impl-session-store.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P4 单元 4.1 —— `internal/session`（store / event / path 三个文件）**
+**先做 4.3 再做 4.2**（ROADMAP 的编号不变，只是顺序换了）：恢复需要"事件 → 消息"的投影，
+而 4.2 是接线。先接线等于把投影临时写在 adaptor 里，回头还要搬一次。
 
-按 `CODE-DESIGN.md` §6 的表实现，签名已定，不要现场改：
+**P4 单元 4.3 —— `session/projection.go`**
 
-1. `event.go`：`Event{Seq uint64, Kind EventKind, TS time.Time, Data json.RawMessage}`、
-   `NewEvent(kind, payload any)`、`Decode(v any)`；4 种 Kind（`compaction_applied` 只预留，不产生）
-2. `path.go`：`namespaceDirName(workingDir)` = 目录名（sanitize 掉非法字符）+ `-` +
-   `sha1(绝对路径)` 前 10 位。同名项目不能互相覆盖；Windows 盘符与大写要先折叠
-3. `store.go`：`NewStore` / `Create`（写 `session_started`）/ `Append`（`O_APPEND`，追加时赋 seq）/
-   `Load` / `List` / `Latest`
-4. **约束**：`session` 不 import `llm`。投影结果用中立结构（`Turn`），转 `llm.Message` 在 `appstate`
-5. 验收：写 N 条 → `Load` → 逐字段相等；**坏行（半截 JSON）跳过并计数**，
-   一行坏掉不能让整个会话读不出来；`List` 按时间倒序，`Latest` 取最新
+1. `type Turn struct { User, Assistant string; Tools []ToolRecord }`
+2. `func BuildTurns(evs []Event) ([]Turn, error)`：`user_message` 开一个新 Turn，
+   紧随其后的 `assistant_turn` 填进同一个 Turn；没有 user 打头的 assistant_turn 单独成 Turn（`User` 为空）；
+   `session_started` 与 `compaction_applied` 跳过。**不丢正文**：多轮 assistant_turn 用 `\n\n` 连起来
+3. 验收：`user/assistant/user/assistant` 配对正确；孤立 assistant 不 panic；空事件列表返回空
 
-**这一单元的规模正好卡在上限**（3 源文件）。`projection.go` 与恢复接线留给 4.2/4.3，别一次做完。
-**开工前先看**：`ARCHITECTURE.md` §4.4 的存储布局（`sessions/<目录名>-<sha1前10>/<session-id>/transcript_events.jsonl`
-+ `index.json`）。`index.json` 可以先不写（`List` 靠扫目录 + 读每条的首尾事件），
-真需要了再加——两处写索引必然会不一致。
+**P4 单元 4.2 —— 恢复接线**（`appstate` + `repl` + `cmd`）
+
+1. `appstate.Restore(turns []session.Turn)`：把 Turn 转成 `llm.Message` 交替序列，写进历史
+2. **关键限制，先想清楚**：恢复的历史**只有正文，没有 tool 消息**。工具摘要不进上下文，
+   因为 tool 消息必须对应 `tool_calls`（id + 参数），而库里只存了摘要。重启后模型不知道"上次跑过什么"，
+   但用户看得到。若将来要让模型也知道，得在 `AssistantTurn` 里存完整调用——那是改存储格式，先问人
+3. `repl` 启动时：`Store.Latest()` 有结果 → 恢复并在标题下显示一行 `已恢复 <ID>（N 轮）`；
+   `--new` 强制新建。命令行的 flag 加在 `cmd/root.go`，**这是新增公开选项，属可预知的小事**，但要在
+   `docs/CODE-DESIGN.md` §2 的 `Options` 表里登记
+4. 回合结束时写库：`appstate.runTurn` 在 `EventDone` 前追加 `assistant_turn`（先写 user_message 在回合开始）；
+   **失败只记日志**——存不下历史不该让对话中断
+5. 验收：真跑两轮 → 退出 → 重启同目录自动接上；换目录看不到别人的会话
+
+**不要顺手做**：`/sessions` 选择器（4.5）、`/context`（4.4）。会话文件目前靠 `Store.List()` 全扫，
+几十个会话无感，先别引索引。
 
 ## 已知坑 / 需要绕过的东西
 

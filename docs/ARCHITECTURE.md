@@ -225,7 +225,7 @@ type Guard interface {
 ### 4.4 会话
 
 ```go
-// internal/session/session.go
+// internal/session/event.go
 type EventKind string
 
 const (
@@ -250,10 +250,13 @@ type Event struct {
 ```
 ~/.sycode/sessions/
 └── <工作目录名>-<sha1前10位>/
-    ├── <session-id>/
-    │   └── transcript_events.jsonl   # 只追加，永不改写
-    └── index.json                    # 摘要索引（标题/时间/回合数），可重建
+    └── <session-id>/
+        └── transcript_events.jsonl   # 只追加，永不改写
 ```
+
+> 原设计的 `index.json`（标题/时间/回合数的摘要索引）**没有实现**：`List` 直接扫目录读会话文件得出摘要。
+> 索引要在两处保持一致，而会话文件本来就不大；等列表真慢了再加，届时索引应当是"可重建的缓存"而不是第二份真相。
+> 命名空间目录名里的可读前缀限 32 字符——完整路径还要再嵌两层，Windows 默认 260 字符上限经不起长目录名。
 
 ## 5. 数据流：一次用户输入
 

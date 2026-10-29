@@ -509,19 +509,30 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 
 | 文件 | 函数 | 签名 |
 |---|---|---|
-| `store.go` | `NewStore` | `func NewStore(workingDir string) (*Store, error)` |
-| | `Create` | `func (s *Store) Create() (*Session, error)`（写 `session_started`） |
-| | `Append` | `func (s *Store) Append(sess *Session, ev Event) error`（O_APPEND，赋 seq） |
+| `store.go` | `NewStore` | `func NewStore(workingDir string) (*Store, error)`（只算路径，不建目录） |
+| | `Create` | `func (s *Store) Create() (*Session, error)`（建目录 + 写 `session_started`） |
+| | `Append` | `func (s *Store) Append(sess *Session, ev Event) error`（`O_APPEND`，`Seq` 与零值 `TS` 在这里补） |
 | | `Load` | `func (s *Store) Load(id string) (*Loaded, error)` |
-| | `List` | `func (s *Store) List() ([]Summary, error)` |
+| | `List` | `func (s *Store) List() ([]Summary, error)`（扫目录，按 `Updated` 倒序） |
 | | `Latest` | `func (s *Store) Latest() (Summary, bool, error)` |
-| | `PruneExpired` | `func PruneExpired(root string, cutoff time.Time) error` |
-| `event.go` | `NewEvent` | `func NewEvent(kind EventKind, payload any) (Event, error)` |
+| | `readEvents` | `func readEvents(path string) ([]Event, int, error)`（逐行读，坏行只计数） |
+| | `summarize` / `shortenTitle` | `func summarize(id string, events []Event, corrupt int) Summary` / `func shortenTitle(text string) string` |
+| | `ensureTrailingNewline` | `func ensureTrailingNewline(file *os.File) error`（上一进程死在半行时先补换行） |
+| `event.go` | `NewEvent` | `func NewEvent(kind EventKind, payload any) (Event, error)`（`Seq` 留 0） |
 | | `Decode` | `func (e Event) Decode(v any) error` |
-| `projection.go` | `BuildTurns` | `func BuildTurns(evs []Event) ([]Turn, error)` |
-| `path.go` | `namespaceDirName` | `func namespaceDirName(workingDir string) string`（目录名-sanitized + sha1 前 10 位） |
+| `path.go` | `namespaceDirName` | `func namespaceDirName(workingDir string) string`（目录名 sanitize 到 32 字符 + sha1 前 10 位） |
+| | `normalizeWorkDir` | `func normalizeWorkDir(dir string) string`（绝对化 + Clean；Windows 折小写） |
+| `projection.go` | `BuildTurns` | `func BuildTurns(evs []Event) ([]Turn, error)`（4.3 再写） |
 
-**关键约束**：`session` 不 import `llm`。投影结果是中立的 `Turn{User, Assistant string; Tools []ToolRecord}`，由 `appstate` 转成 `llm.Message`。常见实现在此处反向依赖 `llm/core`，我们不跟。
+**关键约束**：`session` 不 import `llm`（`cli/cmd/deps_test.go` 会拦）。投影结果是中立的
+`Turn{User, Assistant string; Tools []ToolRecord}`，由 `appstate` 转成 `llm.Message`。
+常见实现在此处反向依赖 `llm/core`，我们不跟。
+
+**2026-10-29 实施后调整**：
+- `PruneExpired` **从会话层移走**：`cleanup` 已有通用的 `pruneExpired(dir, cutoff)`，会话回收等 4.2 接入时复用同一套逻辑
+- **不写 `index.json`**：`List` 靠扫目录 + 读会话文件得出摘要。两处维护索引必然不一致，而会话文件本来就不大
+- `Session` **不持有文件句柄**：每次 `Append` 打开-写入-关闭。追加频率是"一条输入一次"，开销可忽略，换来不必管句柄生命周期
+- `SessionStarted` 只存 `work_dir`：版本与模型属于"这次运行"而不是"这段对话"，写进去会让恢复出的旧会话看起来用错了模型
 
 ## 7. 回合层 `internal/appstate/`
 
