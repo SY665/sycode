@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 17:35 | 阶段：**P0 完成**，P1 待开工 | 当前单元：无
+更新时间：2026-10-29 17:38 | 阶段：**P1** | 当前单元：**1.1 日志落盘（plan 已出，待 Review）**
 
 ## 已完成（本阶段）
 
@@ -13,16 +13,18 @@
 
 ## 正在进行（未完成）
 
-- 无。P0.4 已收口（2 个提交：`f1011ea` 骨架、`110b226` 修 check.sh 二进制落盘）。
+- **单元 1.1（P1）**：规格 `prompts/phase-1/prompt-1_unit-1-1-logging.md`，计划 `outputs/phase-1/output-1_plan-unit-1-1.md`
+- 卡在 Review 门：等人回 `APPROVED`（计划 §6 有两个待决点：契约修订、时间戳时区）
+- 代码未动：`internal/logging` 尚不存在，`cmd/main.go` 仍是 P0.4 的占位
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P1 单元 1.1 —— `internal/logging`**（预计 2 个文件 / ~150 行）：
+计划已批后，按 `outputs/phase-1/output-1_plan-unit-1-1.md` 执行：
 
-1. 新建 `internal/logging/logging.go`，实现 `Init() (cleanup func(), path string, err error)`、`parseLevel(string) slog.Level`、`logDir() (string, error)`、`createFile(string) (*os.File, error)`
-2. 新建 `internal/logging/logging_test.go`：覆盖级别解析全取值、目录不可写时返回错误而非 panic
-3. 改 `cmd/main.go` 的 `run()`：接入 `logging.Init()` 并 `defer cleanup()`，日志路径写 debug 行
-4. 验收：`SYCODE_LOG_LEVEL=debug ./sycode` 后在 `~/.sycode/logs/` 出现日志文件
+1. 新建 `internal/logging/logging.go`：`Init`、`parseLevel`、`logDir`、`createFile`、`newHandler`
+2. 新建 `internal/logging/logging_test.go`：4 组用例（见计划 §3.3）
+3. 改 `cmd/main.go` 的 `run()`：接入 `Init` + `defer cleanup()`
+4. `bash scripts/check.sh` 全绿 → 提交 → 更新本文件
 
 ## 已知坑 / 需要绕过的东西
 
