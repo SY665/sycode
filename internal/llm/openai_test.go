@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -404,5 +405,131 @@ func TestToOpenAIMessages(t *testing.T) {
 	// 未知角色按 user 处理：丢消息会让模型看到断掉的历史。
 	if msgs[3].OfUser == nil {
 		t.Error("未知角色应退回 user，而不是被丢弃")
+	}
+}
+
+// 以下三组验证"重试只发生在吐字之前"这条边界——它决定了用户会不会看到重复内容。
+
+func TestStreamChat_RetriesBeforeFirstToken(t *testing.T) {
+	withFastBackoff(t)
+
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&requests, 1) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(w, `{"error":{"message":"Rate limit reached","type":"rate_limit_error","code":"rate_limit_exceeded"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\ndata: %s\n\ndata: %s\n\ndata: [DONE]\n\n", chunkHello, chunkStop, chunkUsage)
+		w.(http.Flusher).Flush()
+	}))
+	t.Cleanup(srv.Close)
+
+	ch, err := newTestClient(t, srv.URL).StreamChat(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("发起请求失败：%v", err)
+	}
+
+	events := collect(t, ch)
+	var retries []int
+	for _, ev := range events {
+		if ev.Type == EventRetry {
+			retries = append(retries, ev.Attempt)
+		}
+	}
+	// UI 要能显示"第几次失败、正在重试"，否则用户只看到界面卡住。
+	if len(retries) != 1 || retries[0] != 1 {
+		t.Fatalf("应有一个重试事件且报告第 1 次失败，实际 %v", retries)
+	}
+	if got := textOf(events); got != "你" {
+		t.Errorf("重试后的正文不应重复，实际 %q", got)
+	}
+	if final := terminal(t, events); final.Type != EventDone {
+		t.Errorf("重试成功后应正常收尾，实际 %+v", final)
+	}
+	if n := atomic.LoadInt32(&requests); n != 2 {
+		t.Errorf("应请求 2 次，实际 %d", n)
+	}
+}
+
+func TestStreamChat_NoRetryOnBadRequest(t *testing.T) {
+	withFastBackoff(t)
+
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"message":"Unknown parameter","type":"invalid_request_error","code":"invalid_parameter"}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	ch, err := newTestClient(t, srv.URL).StreamChat(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("发起请求失败：%v", err)
+	}
+
+	events := collect(t, ch)
+	for _, ev := range events {
+		if ev.Type == EventRetry {
+			t.Errorf("400 不该重试：%+v", ev)
+		}
+	}
+	if final := terminal(t, events); final.Type != EventError {
+		t.Errorf("400 应以错误收尾，实际 %+v", final)
+	}
+	if n := atomic.LoadInt32(&requests); n != 1 {
+		t.Errorf("不可重试错误只应请求 1 次，实际 %d", n)
+	}
+}
+
+func TestStreamChat_NoRetryAfterFirstToken(t *testing.T) {
+	withFastBackoff(t)
+
+	// 第一次请求：先吐一个字，然后断在半截。第二次（若发生）会返回另一段文本，
+	// 这样"用户看到重复内容"就会在断言里暴露。
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		flusher := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if atomic.AddInt32(&requests, 1) == 1 {
+			fmt.Fprintf(w, "data: %s\n\n", chunkHello)
+			fmt.Fprint(w, `data: {"id":"c1","object":"chat.comp`)
+			flusher.Flush()
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\ndata: %s\n\ndata: [DONE]\n\n", chunkWorld, chunkStop)
+		flusher.Flush()
+	}))
+	t.Cleanup(srv.Close)
+
+	ch, err := newTestClient(t, srv.URL).StreamChat(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("发起请求失败：%v", err)
+	}
+
+	events := collect(t, ch)
+	for _, ev := range events {
+		if ev.Type == EventRetry {
+			t.Errorf("已经吐字后不该重试：%+v", ev)
+		}
+	}
+	if got := textOf(events); got != "你" {
+		t.Errorf("正文不应出现第二次尝试的内容，实际 %q", got)
+	}
+	final := terminal(t, events)
+	if final.Type != EventError || !strings.Contains(final.Err.Error(), "中断") {
+		t.Errorf("截断应以「中断」错误收尾，实际 %+v", final)
+	}
+	if n := atomic.LoadInt32(&requests); n != 1 {
+		t.Errorf("吐字后的失败不应重发请求，实际 %d 次", n)
 	}
 }

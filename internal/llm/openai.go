@@ -81,11 +81,39 @@ func (c *OpenAI) StreamChat(ctx context.Context, req Request) (<-chan StreamEven
 		return nil, err
 	}
 
-	stream := c.client.Chat.Completions.NewStreaming(ctx, params)
-
 	out := make(chan StreamEvent, eventBuffer)
-	go c.pump(ctx, stream, out)
+	go c.run(ctx, params, out)
 	return out, nil
+}
+
+// run 负责"请求 → 解析"的整轮，并按可重试性决定要不要再来一次。
+//
+// 重试放在这里而不是包一层 StreamChat：流式接口一旦开始吐字就无法"撤回"，
+// 只有第一次尝试什么都没产出时，重试对用户才是透明的。
+func (c *OpenAI) run(ctx context.Context, params oai.ChatCompletionNewParams, out chan<- StreamEvent) {
+	defer close(out)
+
+	var outcome pumpOutcome
+	err := Do(ctx, maxRetries+1, func(attemptCtx context.Context) error {
+		stream := c.client.Chat.Completions.NewStreaming(attemptCtx, params)
+		result, err := c.pump(attemptCtx, stream, out)
+		outcome = result
+		if err != nil && result.emitted {
+			// 已经给用户看过内容：包一层让 isRetryable 拒绝重试，但错误链保持原样。
+			return &partialError{err: err}
+		}
+		return err
+	}, func(attempt int, _ error) {
+		// 让 UI 能显示"第 N 次失败，正在重试"，否则用户只会觉得卡住。
+		emit(ctx, out, newEvent(EventRetry, withAttempt(attempt)))
+	})
+
+	if err == nil {
+		emit(ctx, out, doneEvent(outcome.usage))
+		return
+	}
+	// 终态错误：Translate 把英文原文换成中文；ctx 已取消时 emit 会自行放弃。
+	emit(ctx, out, errEvent(Translate(err)))
 }
 
 // buildParams 把请求翻译成 SDK 参数；只在"请求根本构造不出来"时返回错误。
@@ -125,15 +153,25 @@ func (c *OpenAI) buildParams(req Request) (oai.ChatCompletionNewParams, error) {
 	return params, nil
 }
 
-// pump 把 SDK 的分片流翻译成 StreamEvent，并在退出前保证有且只有一个终态事件。
-func (c *OpenAI) pump(ctx context.Context, stream *ssestream.Stream[oai.ChatCompletionChunk], out chan<- StreamEvent) {
-	defer close(out)
+// pumpOutcome 是一次解析的副产物。
+type pumpOutcome struct {
+	// usage 是供应商报的用量，没报则为 nil。
+	usage *Usage
+	// emitted 表示已经向用户展示过内容（正文或工具调用）。
+	// 它决定"这次失败能否重试"：展示过再重试会出现重复内容。
+	emitted bool
+}
+
+// pump 解析一次请求的流，只发增量与工具事件；终态事件由 run 统一发。
+//
+// 返回错误表示这次尝试失败：由 run 判断能否重试、并在最后译成中文。
+func (c *OpenAI) pump(ctx context.Context, stream *ssestream.Stream[oai.ChatCompletionChunk], out chan<- StreamEvent) (pumpOutcome, error) {
 	defer stream.Close()
 
 	var (
-		calls  toolCallBuffer
-		usage  *Usage
-		sawEnd bool // 是否收到过"正常结束"的信号（finish_reason 或 usage）
+		outcome pumpOutcome
+		calls   toolCallBuffer
+		sawEnd  bool // 是否收到过"正常结束"的信号（finish_reason 或 usage）
 	)
 
 	for stream.Next() {
@@ -141,7 +179,7 @@ func (c *OpenAI) pump(ctx context.Context, stream *ssestream.Stream[oai.ChatComp
 
 		// 开了 include_usage 后，最后一个分片的 choices 为空、只有 usage。
 		if chunk.Usage.TotalTokens > 0 {
-			usage = &Usage{
+			outcome.usage = &Usage{
 				PromptTokens:     int(chunk.Usage.PromptTokens),
 				CompletionTokens: int(chunk.Usage.CompletionTokens),
 				TotalTokens:      int(chunk.Usage.TotalTokens),
@@ -155,28 +193,30 @@ func (c *OpenAI) pump(ctx context.Context, stream *ssestream.Stream[oai.ChatComp
 			}
 
 			if choice.Delta.Content != "" {
+				outcome.emitted = true
 				if !emit(ctx, out, newEvent(EventText, withText(choice.Delta.Content))) {
-					return
+					return outcome, ctx.Err()
 				}
 			}
 
 			for _, delta := range choice.Delta.ToolCalls {
 				if started := calls.merge(delta); started != nil {
+					// 工具调用也要算"已展示"：重试会让 UI 里多出一次调用。
+					outcome.emitted = true
 					if !emit(ctx, out, newEvent(EventToolStart, withTool(started))) {
-						return
+						return outcome, ctx.Err()
 					}
 				}
 			}
 
 			if choice.FinishReason == finishToolCalls && !emitCalls(ctx, out, calls.drain()) {
-				return
+				return outcome, ctx.Err()
 			}
 		}
 	}
 
 	if err := stream.Err(); err != nil {
-		emit(ctx, out, errEvent(Translate(err)))
-		return
+		return outcome, err
 	}
 
 	if !sawEnd {
@@ -185,15 +225,14 @@ func (c *OpenAI) pump(ctx context.Context, stream *ssestream.Stream[oai.ChatComp
 		// 真实的兼容端点一定会在最后一个分片给 finish_reason（调工具时是 "tool_calls"），
 		// 少数不给的也会在 include_usage 下补一个 usage 分片。
 		// 宁可提示"可能不完整"，也不能把半句话当完整回答交给用户。
-		emit(ctx, out, errEvent(errors.New("执行失败：连接在模型给出结束信号之前中断，回答可能不完整。请重试")))
-		return
+		return outcome, errStreamTruncated
 	}
 
 	// 有的兼容端点只给 finish_reason=stop 就结束了；把剩下的调用补发，避免它凭空消失。
 	if !emitCalls(ctx, out, calls.drain()) {
-		return
+		return outcome, ctx.Err()
 	}
-	emit(ctx, out, doneEvent(usage))
+	return outcome, nil
 }
 
 // emit 发送一个事件，返回 false 表示消费方已不再接收（ctx 取消或下游退出）。

@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 19:35 | 阶段：**P2** | 当前单元：2.5 已完成，下一单元 2.6（重试与错误分类）
+更新时间：2026-10-29 19:55 | 阶段：**P2** | 当前单元：2.6 已完成，下一单元 2.7（REPL 流式渲染 + Esc 中断）
 
 ## 已完成（本阶段）
 
@@ -33,24 +33,32 @@
   - `NewOpenAI` 显式传 key + 关 SDK 重试（防环境变量偷盖配置、防重试次数翻倍且 UI 不可见）
   - 分片工具调用按 `index` 归并；`tool_start` 发快照，`tool_end` 发完整参数
   - `Translate`：已翻译→取消→超时→`*oai.Error`→`*url.Error`→兜底；`httpStatusError` 按状态码给动作指引
-- 代码 3,632 行（源码 1,764 / 测试 1,868），17 笔提交；直接依赖 6 个（cobra/bubbletea/bubbles/lipgloss/yaml.v3/openai-go）
-- 记录：`output-2/3/4/5_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 2.6 已收口（`retry.go` 166 + 测试 222）：`Do`（`maxRetries=3`、封顶 30s、抖动不越界）+ `isRetryable` + `partialError`
+  - **重试只在 `run`**：`pump` 只发增量/工具事件并返回 `pumpOutcome{usage, emitted}`；`emitted` 为真即用 `partialError` 阻止重试
+  - **真 bug**：重试判定在 `Translate` 之前，错误还是 `*oai.Error`；只认 `httpStatusError` 会让 429 一次就失败（测试抓到）
+  - `isRetryable` 认 429/5xx/连接失败/流截断；不认 4xx/取消/超时
+  - `estimate.go` **主动延后**：现在没有消费方，CODE-DESIGN 已改注"延后（P4/P6）"
+- 代码 4,188 行（源码 1,969 / 测试 2,217），18 笔提交；直接依赖 6 个（cobra/bubbletea/bubbles/lipgloss/yaml.v3/openai-go）
+- 记录：`output-2..6_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P2 单元 2.6 —— 重试与错误分类**（`internal/llm/retry.go` + `estimate.go`，2 个文件）：
+**P2 单元 2.7 —— REPL 流式渲染 + `Esc` 中断**（`internal/cli/repl/` + `internal/agentcore` 最小桩）：
 
-1. `retry.go`：`Do(ctx, attempts int, fn func(context.Context) error, onRetry func(attempt int, err error)) error`
-   —— 指数退避（1s/2s/4s，带抖动），只重试 `isRetryable`，最后一次错误原样返回
-2. `isRetryable(err error) bool`：429/5xx/网络可重试；400/401/403/404 不重试。判定基于 `httpStatusError.Status`（已在 2.5 就位）
-3. `estimate.go`：`Estimate(s string) int`（按 字符数/3 + 4 的粗估，**注释里必须写明是估算**）、`EstimateMessages`
-4. **关键设计问题（先想清楚再写）**：`StreamChat` 已经是流式的，"重试"不能简单包一层——
-   只有**在产出第一个正文增量之前**失败才能重试；一旦已经吐字，再重试会让用户看到重复内容。
-   倾向做法：把重试放进 `pump`（记录 `emitted bool`），重试时发 `EventRetry{Attempt:n}` 让 UI 显示进度。
-   这会让 `openai.go` 增加约 30 行，属于本单元而不是 2.5 的债。
-5. 验收：429 三次后报错且 UI 收到 3 个 `EventRetry`；400 一次就失败；吐字之后失败不再重试
+1. `repl.Deps` 增加 `Core agentcore.AgentCore`（CODE-DESIGN §9 已预留）；`Model` 增加 `streaming`/`buffer` 状态
+2. `waitEvent(ch <-chan llm.StreamEvent) tea.Cmd`：channel → tea.Msg 的桥（CODE-DESIGN §9 已列）
+3. `Update` 处理：`EventText` 追加正文、`EventReasoning` 折叠、`EventRetry` 显示"第 N 次失败，正在重试…"、`EventUsage` 记数、终态收尾
+4. `Esc`：`Interrupt()` → `ctx` 取消 → 流结束但**保留已产出文本**（PRD F-LLM-6）
+5. `agentcore` 这一层暂时只要一个 `Submit(ctx, input) (<-chan llm.StreamEvent, error)` 的最小实现（P3 才接工具循环）
+6. 验收：真实端点下 `sycode` 里输入一句话能流式看到回答；`Esc` 中断后不留半截状态
 
-## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
+**风险**：这一单元要动 `agentcore`，但 `appstate` 还不存在。两个选择——
+（a）先做一个只转发 `llm.Client` 的 `agentcore` 桩，`appstate` 留到 P3；
+（b）本单元只把 `llm.Client` 直接注入 `repl.Deps`，`agentcore` 等 P3 一起建。
+倾向 **(b)**：少一层空壳，`repl` 依赖 `llm.Client` 不违反依赖方向（`cli → llm` 未被禁），
+P3 建 `agentcore` 时再把它插进中间。开工前先确认这一点。
+
+## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
 
 - 工具 shell 的 PATH 被裁剪：`go` 不可见 → 先 `source scripts/env.sh`（不是没装）
 - `go build ./...` 会把 main 包二进制写到当前目录 → `scripts/check.sh` 已改成 `-o <临时目录>/`

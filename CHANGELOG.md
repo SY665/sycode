@@ -5,6 +5,8 @@
 ## [Unreleased]
 
 ### Added
+- `internal/llm/retry.go`：`Do` 指数退避重试（`maxRetries=3`、封顶 30s、加抖动且不越界）；`isRetryable` 认 429/5xx/连接失败/流截断，不认 4xx/取消/超时；`partialError` 让"已吐字之后"的失败不再重试
+- `internal/llm/openai.go` 重试接线：重试只发生在 `run`，每次失败发 `EventRetry{Attempt:n}` 供 UI 显示进度
 - `internal/llm/openai.go`：OpenAI 兼容流式客户端（`openai/openai-go/v3`）。`NewOpenAI` 只校验、关掉 SDK 自带重试；`StreamChat` 返回由发送方关闭的事件 channel，HTTP 错误也走事件流；分片工具调用按 `index` 归并（`tool_start` 发快照、`tool_end` 发完整参数）；**截断识别**——没收到 `finish_reason`/`usage` 就结束时报错，不把半句话当完整回答
 - `internal/llm/errors.go`：`Translate` 把供应商/网络英文错误翻成中文（取消/超时/HTTP 状态/连接失败各有文案），`httpStatusError` 按状态码给"下一步该干什么"并用 `Unwrap` 保住错误链；已翻译的错误不二次包装
 - `internal/llm`：`Client` 契约、`Request`/`Message`/`Role`/`ToolCall`/`ToolSchema`、`StreamEvent`（8 类事件 + `IsTerminal`）、三个事件构造器；`systemprompt.Build` 按 身份 → 环境 → `AGENTS.md` 拼装（`Current shell:` 按 ADR-006 原样，8KiB 截断且不切断多字节字符）

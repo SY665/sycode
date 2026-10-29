@@ -295,7 +295,9 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 | `NewOpenAI` | `func NewOpenAI(cfg OpenAIConfig) (*OpenAI, error)` | 校验模型名与端点；显式传 key、**关掉 SDK 自带重试**（重试归 2.6，要发 `EventRetry`）；**不发请求** |
 | `StreamChat` | `func (c *OpenAI) StreamChat(ctx context.Context, req Request) (<-chan StreamEvent, error)` | 起 goroutine，返回只读 channel；HTTP 层失败也走事件流 |
 | `buildParams` | `func (c *OpenAI) buildParams(req Request) (oai.ChatCompletionNewParams, error)` | 纯转换；只在"请求构造不出来"（无模型/无消息）时失败 |
-| `pump` | `func (c *OpenAI) pump(ctx, stream *ssestream.Stream[oai.ChatCompletionChunk], out chan<- StreamEvent)` | 分片 → 事件；**含截断识别**（见下） |
+| `run` | `func (c *OpenAI) run(ctx context.Context, params oai.ChatCompletionNewParams, out chan<- StreamEvent)` | **重试的唯一位置**：`Do` 包住"请求 + 解析"，`emitted` 为真时用 `partialError` 阻止重试；成功后发 `done`，失败发 `error` |
+| `pumpOutcome` | `type pumpOutcome struct{ usage *Usage; emitted bool }` | 一次解析的副产物：用量，以及"是否已给用户看过内容" |
+| `pump` | `func (c *OpenAI) pump(ctx, stream *ssestream.Stream[oai.ChatCompletionChunk], out chan<- StreamEvent) (pumpOutcome, error)` | 分片 → 增量/工具事件（**不发终态**）；返回错误交给 `run` 决定重试；**含截断识别**（见下） |
 | `emit` / `emitCalls` | `func emit(ctx, out, ev) bool` / `func emitCalls(ctx, out, calls []*ToolCall) bool` | 带 ctx 取消的发送；返回 false 表示下游已放弃 |
 | `toOpenAIMessages` | `func toOpenAIMessages(msgs []Message) []oai.ChatCompletionMessageParamUnion` | 纯转换；未知角色退回 user 而不是丢弃 |
 | `toOpenAIToolCall` | `func toOpenAIToolCall(call ToolCall) oai.ChatCompletionMessageToolCallUnionParam` | assistant 消息里的调用回放 |
@@ -319,14 +321,27 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 
 `Translate` 只处理原始错误；已经中文化的错误原样返回（`errors.As` 判定后直接 return），避免"执行失败：执行失败："。
 
-### `retry.go` / `estimate.go`
+### `retry.go`
 
-| 函数 | 签名 |
-|---|---|
-| `Do` | `func Do(ctx context.Context, attempts int, fn func(context.Context) error, onRetry func(attempt int, err error)) error` |
-| `isRetryable` | `func isRetryable(err error) bool`（429/5xx/网络；4xx 不重试） |
-| `Estimate` | `func Estimate(s string) int` |
-| `EstimateMessages` | `func EstimateMessages(msgs []Message) int`（**标注为估算**，不用于硬裁剪） |
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `Do` | `func Do(ctx context.Context, attempts int, fn func(context.Context) error, onRetry func(attempt int, err error)) error` | 执行 fn，对可重试错误按指数退避重试；`attempts` 含首次；`onRetry` 的 `attempt` 是**刚失败的那一次**（从 1 开始）；返回最后一次错误 |
+| `isRetryable` | `func isRetryable(err error) bool` | 429/5xx/连接失败/流截断可重试；4xx、取消、超时、未知错误不重试；`partialError` 一律不重试 |
+| `retryableStatus` | `func retryableStatus(status int) bool` | `429` 或 `>=500`；给 `httpStatusError` 与 `*oai.Error` 共用 |
+| `backoffDelay` | `func backoffDelay(attempt int) time.Duration` | base 翻倍 + 最多 50% 抖动，**加抖动后也不越过 `maxBackoff`**；首次不加抖动 |
+| `sleep` | `func sleep(ctx context.Context, d time.Duration) error` | 可被 ctx 打断的等待（用 Timer，避免 `time.After` 的定时器残留） |
+| `partialError` | `type partialError struct{ err error }` | 标记"已经给用户看过内容之后才失败"：包住真实错误（`Unwrap` 保留链、`Translate` 照常翻译），但让 `isRetryable` 返回 false |
+
+常量：`maxRetries = 3`（PRD F-LLM-5）、`maxBackoff = 30s`。`backoffBase` 是**变量**，只为让测试压到毫秒级，生产不要改。
+
+**为什么"吐字后不重试"要单独一个类型**：流式回答无法撤回，重试会让用户看到重复内容。
+判定点放在 `openai.run`——它是唯一知道"这次尝试有没有 `emitted`"的地方（见 `pumpOutcome`）。
+
+### `estimate.go`（延后）
+
+`Estimate` / `EstimateMessages` 推迟到真正有消费方时再做（P4 上下文预算 / P6 压缩）：
+现在写只有测试会调用它，属于"新增导出却没人用"（§13 检查清单）。
+消费方出现时按原计划实现：按 字节/3 粗估，注释必须写明是估算、不得用于硬裁剪。
 
 ## 6. 会话层 `internal/session/`
 
