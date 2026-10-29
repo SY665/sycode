@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -97,13 +98,30 @@ func TestRunCmd_NotImplementedHasExitCodeOne(t *testing.T) {
 	}
 }
 
-func TestRootCommand_NoArgsReportsNotImplemented(t *testing.T) {
-	_, _, err := newTestRoot(t)
-	if err == nil {
-		t.Fatal("P1.4 之前，无参数应报尚未实现")
+func TestRootCommand_NoArgsStartsREPL(t *testing.T) {
+	// 用 stub 替换真实界面：否则测试会把终端交给 Bubble Tea，在交互终端里挂住。
+	sentinel := errors.New("已进入界面")
+	called := false
+	root := NewRootCommand(Options{
+		Version: "0.1.0",
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		StartREPL: func() error {
+			called = true
+			return sentinel
+		},
+	})
+	root.SetArgs(nil)
+
+	err := root.Execute()
+	if !called {
+		t.Fatal("无参数执行应进入交互界面")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("应原样返回界面错误，实际 %v", err)
 	}
 	if code := ExitCode(err); code != 1 {
-		t.Errorf("期望退出码 1，实际 %d", code)
+		t.Errorf("界面错误按一般错误处理，期望退出码 1，实际 %d", code)
 	}
 }
 

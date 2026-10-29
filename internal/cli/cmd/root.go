@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/sy665/sycode/internal/cli/repl"
 )
 
 // Options 注入进程级依赖。输出目标可替换，便于测试断言终端文案。
@@ -20,6 +23,10 @@ type Options struct {
 	Commit  string
 	Stdout  io.Writer
 	Stderr  io.Writer
+
+	// StartREPL 允许测试替换交互入口。为空时走真实界面。
+	// 不这样做的话，"无参数启动"的测试会真的把终端交给 Bubble Tea，在交互式终端里跑 go test 时会挂住。
+	StartREPL func() error
 }
 
 // NewRootCommand 构建 sycode 的根命令。
@@ -78,9 +85,12 @@ func NewRootCommand(opts Options) *cobra.Command {
 	return root
 }
 
-// runREPL 进入交互式界面。P1 单元 1.4 才实现，当前明确报"尚未实现"而不是静默退出。
-func runREPL(_ Options) error {
-	return errNotImplemented("交互式界面", "docs/ROADMAP.md P1.4")
+// runREPL 进入交互式界面；测试可经 Options.StartREPL 替换。
+func runREPL(opts Options) error {
+	if opts.StartREPL != nil {
+		return opts.StartREPL()
+	}
+	return repl.Run(context.Background(), repl.Deps{Version: versionString(opts)})
 }
 
 // newVersionCmd 提供 `sycode version`，与 `--version` 等价。

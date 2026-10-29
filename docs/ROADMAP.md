@@ -34,12 +34,12 @@
 
 | # | 内容 | 验收 |
 |---|---|---|
-| 1.1 | `cmd/main.go`：日志初始化、版本注入、退出码 | `--version` 输出 `0.1.0 (build abcdef)` |
-| 1.2 | `internal/logging`：slog + 文件轮转 + `SYCODE_LOG_LEVEL` | debug 级别写出 `~/.sycode/logs/*.log` |
-| 1.3 | `internal/cli/cmd`：cobra root + `version` + `run` 占位 | `sycode run "hi"` 返回未实现错误，退出码 1 |
-| 1.4 | `internal/cli/repl`：bubbletea 最小程序（textarea + 退出） | `Ctrl+C` 两次退出，`/exit` 退出 |
+| 1.1 | `cmd/main.go`：日志初始化、版本注入、退出码 | ✅ `--version` 输出 `0.1.0 (build abcdef)`，退出码 0/1/2 分离 |
+| 1.2 | `internal/logging`：slog + 文件命名 + `SYCODE_LOG_LEVEL` | ✅ debug 级别写出 `~/.sycode/logs/sycode-<ts>.log`（JSON） |
+| 1.3 | `internal/cli/cmd`：cobra root + `version` + `run` 占位 + 全中文帮助 | ✅ `sycode run "hi"` 返回未实现错误，退出码 1；`bogu` 退出码 2 |
+| 1.4 | `internal/cli/repl`：bubbletea 最小程序（textarea + 退出） | ✅ `Ctrl+C` 两次退出、`/exit` 退出；非 TTY 友好报错不挂死 |
 | 1.5 | `internal/cli/cmd/deps_test.go`：依赖方向断言 | 人为引入 `tools→llm` 时测试失败 |
-| 1.6 | CI：三平台 `fmt/vet/test/race` | PR 上出现三个绿灯 |
+| 1.6 | CI：三平台 `fmt/vet/test/race` | ✅ 工作流已就位（待推送后首次验证） |
 
 **退出条件**：P1 全部勾选；`go test -race ./...` 无数据竞争。
 

@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `internal/cli/repl`：Bubble Tea v2 最小界面（textarea 输入、`Enter` 提交、`/exit`、双击 `Ctrl+C` 退出）；非 TTY 下给出中文提示而非花屏
 - `internal/cli/cmd`：cobra 命令树（`sycode` / `version` / `run`）、中文帮助与错误、退出码 0/1/2 分离；`--version` 输出 `0.1.0 (build <sha>)`
 - `internal/logging`：`Init`（返回 cleanup 与日志路径）、`SYCODE_LOG_LEVEL` 解析（未知值回退 info）、`~/.sycode/logs/sycode-<时间戳>.log` 的 JSON 日志；`run()` 已接线，初始化失败退出码 1
 - 规划文档：PRD、架构 RFC（含 ADR-001~008）、路线图、开发流程、编码规范；`.ai-interactions` 留痕骨架与三份模板

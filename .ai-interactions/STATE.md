@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 18:20 | 阶段：**P1** | 当前单元：**1.3 已完成**，下一单元 1.4（bubbletea 最小 REPL）
+更新时间：2026-10-29 18:35 | 阶段：**P1 收尾** | 当前单元：**1.4 已完成**，下一单元 1.5（依赖方向断言）
 
 ## 已完成（本阶段）
 
@@ -14,19 +14,21 @@
 ## 正在进行（未完成）
 
 - 单元 1.1 已收口：`internal/logging`（114 行 + 140 行测试）+ `run()` 接线
-- 单元 1.3 已收口：`internal/cli/cmd/root.go`（175 行 + 150 行测试）+ `main.go` 退出码映射；引入 cobra（选型表内已授权）
-- 记录：`output-2_impl-unit-1-1.md`、`output-3_impl-unit-1-3.md`
+- 单元 1.3 已收口：`internal/cli/cmd/root.go` + `main.go` 退出码映射；引入 cobra
+- 单元 1.4 已收口：`internal/cli/repl`（200 行 + 180 行测试）；引入 bubbletea/bubbles/lipgloss v2
+- 记录：`output-2/3/4_impl-*.md`
 
 ## 下一步第一件事（具体到文件与函数）
 
 计划已批后，按 `outputs/phase-1/output-1_plan-unit-1-1.md` 执行：
 
-**单元 1.4 —— bubbletea 最小 REPL**（`internal/cli/repl/repl.go` + `repl_test.go` + 接线）：
+**单元 1.5 —— 依赖方向断言**（`internal/cli/cmd/deps_test.go`，1 个文件）：
 
-1. 引入 `charm.land/bubbletea/v2`、`charm.land/lipgloss/v2`、`charm.land/bubbles/v2`（选型表内已授权）
-2. 实现 `Deps`/`NewModel`/`Init`/`Update`/`View`/`Run`（见 CODE-DESIGN §9）
-3. 最小交互：textarea 输入、`Enter` 提交占位响应、`/exit` 与两次 `Ctrl+C` 退出
-4. 验收：`sycode` 能进入界面并干净退出（退出码 0），`go test -race` 无泄漏
+1. 用 `go list -json ./...` 读每个包的 import，断言禁止边：
+   `llm → cli/agentcore/appstate`、`tools → llm`、`filesystem → 任意内部包`、`session → llm`、`appstate → cli`
+2. 验收：临时在 `tools` 里写一行 `import ".../internal/llm"`，测试必须失败
+
+P1 之后进入 P2（模型接入），详见 `docs/ROADMAP.md`。
 
 ## 已知坑 / 需要绕过的东西
 

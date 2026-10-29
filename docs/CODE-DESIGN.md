@@ -364,12 +364,13 @@ type AgentCore interface {
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Deps` | `type Deps struct { Core agentcore.AgentCore; Store *session.Store; Model string }` | |
+| `Deps` | `type Deps struct { Version string; Model string }`（P2 追加 `Core agentcore.AgentCore`、`Store *session.Store`） | 界面只拿展示所需依赖 |
 | `NewModel` | `func NewModel(d Deps) Model` | 只建状态，不做 IO |
-| `Init` | `func (m Model) Init() tea.Cmd` | 首个 cmd（读窗口尺寸/恢复会话） |
+| `Init` | `func (m Model) Init() tea.Cmd` | 输入框聚焦；窗口尺寸由框架发 `WindowSizeMsg` |
 | `Update` | `func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd)` | **唯一**改状态的地方 |
-| `View` | `func (m Model) View() string` | 纯渲染，不改状态 |
-| `Run` | `func Run(ctx context.Context, d Deps) error` | 建 `tea.Program`、接管信号、阻塞 |
+| `View` | `func (m Model) View() tea.View` | v2 返回 `tea.View` 而非 `string`；实际内容由 `render() string` 产出，便于单测 |
+| `Run` | `func Run(ctx context.Context, d Deps) error` | 非 TTY 直接返回中文错误；否则建 `tea.Program` 并阻塞 |
+| `isInteractive` | `func isInteractive(f *os.File) bool` | 字符设备 **且** 不是空设备（`os.SameFile` 排除 `/dev/null`、`NUL`） |
 | `waitEvent` | `func waitEvent(ch <-chan llm.StreamEvent) tea.Cmd` | **channel → tea.Msg 的桥**，UI 与 agent 解耦的关键 |
 
 子包各自的入口（只列一个代表函数，避免过度规定）：
