@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 21:50 | 阶段：**P4 完成 / P5 已规划未开工**（卡在 5.0 分发渠道决策）
+更新时间：2026-10-29 22:20 | 阶段：**P5 进行中**（5.1/5.2 配置已落，等远端仓库；5.3–5.5 未完）
 
 ## 已完成（本阶段）
 
@@ -175,22 +175,27 @@
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P5 的 ROADMAP 已写实（2026-10-29），但开工卡在一个决策上：分发渠道（ROADMAP §5.0）。**
+**5.0 已定 A（推公开仓库），5.1/5.2 的配置已落。现在卡在两件机器做不了的事上：**
 
-仓库没有远端（2026-10-29 定的）。三条路：A 推到公开仓库（CI 出 release，安装脚本/npm 从 release 下载）；
-B 只做本地打包（`scripts/package.sh`）；C 只走 `go install`。**建议 A**——装不上的 install.sh 比没有更糟。
-**这一步要人点头**（对外可见 + 远端地址），点头后才能动 5.1/5.2。
+1. **建远端并首推**：GitHub 建 `sy665/sycode` → `git remote add origin …` → `git push -u origin main`
+2. **打第一个 tag**：`git tag v0.1.0 && git push origin v0.1.0` → `release.yml` 出草稿 release →
+   人工看产物清单（应 6 个 archive + checksums.txt）→ 发布
 
-一旦 5.0 定下，按顺序推进：
+这两步做完，`install.sh` 才真正可用（`releases/latest` 有内容）。**在那之前 5.3–5.5 可以先做**，
+它们不依赖远端：
 
-1. **5.1 构建产物**：`.goreleaser.yaml`（三平台 × 两架构，`CGO_ENABLED=0`，`-s -w -X main.version/commit`，
-   windows 出 zip、其余 tar.gz，`checksums.txt`）。**本机没有包管理器**，GoReleaser 装不上——
-   发布流程放 CI（`.github/workflows/release.yml`），本机只验 `go build` 与快照产物
-2. **5.2 安装路径**：`scripts/install.sh`（检测平台 → 下载 → **校验 sha256** → 装 `~/.local/bin`），
-   或 npm 包装（`postinstall` 下载 + 校验）。校验失败必须退出，不能留半坏二进制
-3. **5.3 启动与体积**：基线已量（Windows `--version` ≈ 320ms、二进制 41MB）。三平台各测 p50 写回 ROADMAP
-4. **5.4 交付文档**：README 安装与首次使用、CHANGELOG 的 v0.1.0 定版、五份文档的评审状态（P0.2 还欠着）
-5. **5.5 交互打磨**：未知斜杠命令给提示、窄终端下弹窗与 diff 换行、`/sessions` 标当前会话、错误文案复查
+- **5.3 启动与体积**：基线已有（Windows 320ms / 41MB）。要补的是三平台 p50 测量方法与记录位置
+- **5.4 交付文档**：README 的安装与首次使用（现在 README 还没有安装段）、CHANGELOG 的 v0.1.0 定版、
+  五份文档的评审状态（P0.2 至今欠着）
+- **5.5 交互打磨**：未知斜杠命令给提示、窄终端下弹窗与 diff 换行、`/sessions` 标当前会话、错误文案复查
+
+**5.1/5.2 已完成**：`.goreleaser.yaml`（6 个产物 + checksums、默认草稿）、`release.yml`（tag 触发，先跑质量门）、
+`scripts/install.sh`（检测平台 → 下载 → 校验 sha256 → 解压 → 安装）。本地用假 release 验过两条路径：
+正常安装成功、校验被篡改时退出 1 且**未写入任何文件**。
+
+**踩到的坑**：① Windows 上 GNU `tar` 会把盘符路径当远程主机（`host:path` 语法），解压必须 `cd` 进去用相对名；
+② Git Bash 的 `sha256sum` 给二进制摘要加反斜杠前缀，比较前要 `tr -d '\\'`；
+③ 产物名别用 `sc.exe`（Windows 服务控制程序黑名单，本次又踩了一次）。
 
 **别顺手做**：上下文管理、子代理（P6 专题）、`/sessions` 切换、恢复历史带工具痕迹（改存储格式）。
 

@@ -322,7 +322,10 @@ sycode/
 │   └── logging/                # logging.go
 ├── docs/
 ├── .ai-interactions/
-├── .github/workflows/ci.yml
+├── .github/workflows/ci.yml      # 推 main / PR：格式、vet、构建、测试、竞态
+├── .github/workflows/release.yml # 推 tag：GoReleaser 出三平台产物与校验文件
+├── .goreleaser.yaml
+├── scripts/install.sh            # 下载 → 校验 sha256 → 装到 ~/.local/bin
 ├── go.mod
 
 ├── Makefile

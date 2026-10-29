@@ -1,0 +1,39 @@
+name: release
+
+# 只在打 tag 时跑：推 main 由 ci.yml 负责质量门，两边不互相等。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  # goreleaser 要往 release 里写产物。
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser 要读完整历史来算提交号与变更范围。
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # 发布前跑一次质量门：打出去的包不能是没测过的代码。
+      - name: Run checks
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: bash scripts/check.sh
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

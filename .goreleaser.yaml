@@ -1,0 +1,54 @@
+version: 2
+
+project_name: sycode
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sycode
+    main: ./cmd
+    binary: sycode
+    # 静态链接：arm64 与 musl 环境的用户不必装 libc 就能跑。
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # -s -w 去掉符号表与调试信息（41MB → 更小）；版本与提交号由链接器注入，
+    # 必须是 main 包里的 var（对 const 静默失效，踩过）。
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+
+archives:
+  - id: sycode
+    ids:
+      - sycode
+    # 名字里带版本与平台：install.sh 直接按这个模板拼 URL，两边必须一致。
+    name_template: "sycode_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  # 变更日志由 CHANGELOG.md 维护；自动生成的 commit 列表只会变成噪音。
+  disable: true
+
+release:
+  # 先出草稿：发布前要人工看一眼产物清单与校验文件。
+  draft: true
+  prerelease: auto
