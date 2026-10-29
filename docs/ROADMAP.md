@@ -54,7 +54,7 @@
 | # | 内容 | 验收 |
 |---|---|---|
 | 2.1 | `internal/providers`：`registry.yaml` + 加载 + 查询 | ✅ 内嵌表解析 + 6 类非法输入校验；未命中返回 `false` 不 panic |
-| 2.2 | `internal/config`：分层加载 + 密钥解析 | 缺 key 时给出可操作错误，不打印 key |
+| 2.2 | `internal/config`：分层加载 + 密钥解析 | ✅ 三级优先级；缺 key 报"请设置环境变量 X"，错误中无密钥内容 |
 | 2.3 | `internal/llm`：`Request`/`Message`/`StreamEvent` + 系统提示 | 单测覆盖分段构建与终态事件 |
 | 2.4 | `internal/llm/openai.go`：SSE 流式解析 | `httptest` 回放：正常/跨行分片/中断/`[DONE]` |
 | 2.5 | 重试与错误分类 | 429 重试 3 次后报错；400 不重试 |

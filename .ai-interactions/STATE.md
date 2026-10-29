@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 18:55 | 阶段：**P2** | 当前单元：2.1 已完成，下一单元 2.2（config）
+更新时间：2026-10-29 19:05 | 阶段：**P2** | 当前单元：2.2 已完成，下一单元 2.3（启动接线）
 
 ## 已完成（本阶段）
 
@@ -18,18 +18,20 @@
 - 单元 1.4 已收口：`internal/cli/repl`（212 行 + 184 行测试）；引入 bubbletea/bubbles/lipgloss v2
 - 单元 1.5 已收口：`internal/cli/cmd/deps_test.go`（123 行），已用注入违规反证有效性
 - 单元 2.1 已收口：`internal/providers`（155 行 + 165 行测试 + registry.yaml）；yaml.v3 已获批
+- 单元 2.2 已收口：`internal/config`（205 行 + 215 行测试）：三级优先级、两类查找错误、密钥三态
 - 记录：`output-2/3/4_impl-*.md`
 
 ## 下一步第一件事（具体到文件与函数）
 
 计划已批后，按 `outputs/phase-1/output-1_plan-unit-1-1.md` 执行：
 
-**P2 单元 2.2 —— `internal/config`**（3 个文件，只做解析与密钥解析，不发请求）：
+**P2 单元 2.3 —— 启动接线**（`cmd/main.go` + `internal/cli/cmd/root.go`，2 个文件）：
 
-1. `config.go`：`Config`/`ProviderConfig`/`Resolved` 类型 + `Resolve(provider, model)`
-2. `loader.go`：`Load(path)`、`DefaultPath()`；文件不存在返回空配置而非错误
-3. `key_resolver.go`：`ResolveKey(p providers.Provider) (string, error)` —— 环境变量优先，缺失时返回中文可操作错误（不回显密钥）
-4. 验收：`sycode` 启动时用 `providers.Load()` + `config` 解析出 provider/model/base_url，能打出 debug 行；缺 key 时退出码 2 且提示该设哪个环境变量
+1. `run()` 按 CODE-DESIGN §1 的顺序：logging → providers.Load → config.Load → Resolve → ResolveKey
+2. 缺密钥：退出码 2 + 中文错误（提示该设哪个环境变量），不进入界面
+3. 解析成功：`slog.Debug` 记录 provider/model/base_url（**不打密钥**）
+4. 把解析结果放进 `cmd.Options`，界面标题显示模型名
+5. 验收：`sycode` 在配好 key 时标题显示模型；未配 key 时退出码 2 且错误可操作
 
 ## 已知坑 / 需要绕过的东西
 

@@ -114,11 +114,15 @@ run() int
 | 文件 | 函数 | 签名 |
 |---|---|---|
 | `config.go` | `Config` | `type Config struct { ActiveProvider, ActiveModel, ThinkingEffort string; Providers map[string]ProviderConfig }` |
-| | `ProviderConfig` | `type ProviderConfig struct { BaseURL, APIKeyEnv string; Models []string }` |
-| | `Resolve` | `func (c Config) Resolve(provider, model string) (Resolved, error)` |
-| `loader.go` | `Load` | `func Load(path string) (Config, error)`（文件不存在 → 空 Config + nil） |
+| | `ProviderConfig` | `type ProviderConfig struct { BaseURL, APIKeyEnv string }`（留空=沿用注册表） |
+| | `Resolved` | `type Resolved struct { ProviderID, ModelID, BaseURL, APIKeyEnv, ThinkingEffort string; ContextWindow int }` |
+| | `Load` | `func Load(path string) (Config, error)`：文件不存在 → 空 Config + nil（首次运行不是错误） |
 | | `DefaultPath` | `func DefaultPath() (string, error)` |
-| `key_resolver.go` | `ResolveKey` | `func ResolveKey(p ProviderConfig) (string, error)`：环境变量优先，其次配置文件 |
+| | `Resolve` | `func (c Config) Resolve(reg *providers.Registry, providerID, modelID string) (Resolved, error)`：显式参数 > 配置 `active_*` > 注册表默认 |
+| `key_resolver.go` | `ResolveKey` | `func ResolveKey(r Resolved) (string, error)`：按 `APIKeyEnv` 读环境变量；`APIKeyEnv` 为空表示不需要密钥 |
+
+> 与早期计划的差异（2026-10-29）：原计划拆 `loader.go`，实际并入 `config.go`——
+> 加载只有两个函数，单独成文件不增加可读性，还把单元推到 4 个文件（超过上限）。
 
 **错误契约**：缺 key 返回的错误必须包含供应商名与"该设哪个环境变量"，且**绝不回显 key**。
 
