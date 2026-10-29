@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **headless `sycode run`**（P4.6）：`run "<提示词>"` 复用同一个 `AgentCore`，区别只在"谁来读事件"。`--format text`（默认）边生成边写，脚本能直接接管道；`--format json` 输出 `{text, tools[], usage}`，工具摘要只取首行。**不恢复、不落盘**——跑一次就结束，不该在 `/sessions` 里留一次性记录。权限默认拒绝（没有人能确认），`--allow-write` 显式放行；放行用的是 `agentcore.AutoApprove`，**不绕过硬拒绝**：`Guard` 判 Denied 的系统路径、`.git/`、家目录隐藏项照样拒绝。出错时保留已生成的半句话再报错，退出码 2 只给缺参与非法格式
 - **斜杠命令表**（P4.5）：`/clear`、`/context`、`/help`、`/sessions`、`/exit`（别名 `/quit`）收进一张 `command` 表，`/help` 从同一张表渲染——命令与说明不可能漂移。`/clear` 清上下文与会话缓冲但**不碰会话文件**（只追加的账本），提示里明说"记录仍然保留"；`/sessions` 列出本目录会话（`ID · 轮数 · 时间 · 标题`，过滤掉 0 轮的空壳），**只列不切**。`AgentCore` 因此多一个 `Sessions()`（唯一一次为展示需求扩接口，经人同意；另一条路是让界面直接持有 `*session.Store`，那会破分层）
 - **`/context`**（P4.4）：分类明细（系统提示与工具 / 用户消息 / 助手回复 / 工具结果）+ 合计 `≈12.3k / 128k（9.6%）`。**窗口未知时显示"上限未知"而不是 0%**；有供应商上报的 `PromptTokens` 时以它为准并标注"（供应商上报）"，否则标注"（估算）"。`llm.EstimateTokens`（字节/3，中文一字约一 token）、`providers.GetModelContextWindow`（返回是否已知，不编默认值）、`appstate` 在终态前补发 `EventUsage`（此前 `EventUsage` 有定义但没有生产者）
 - **会话恢复**（P4.2 后半）：启动默认续上本工作目录的上一次会话，`--new` 强制新建。`Store.Open` 重开已有会话并把序号从最后一条有效事件续上；`appstate.Restore` 把投影灌回上下文（**只放正文**：tool 消息必须挂在带 id 的 `tool_calls` 后面，而库里只有摘要）；界面把恢复的历史画出来，并加一行 `已恢复 <ID>（N 轮）` 与 `—— 以上是上次会话 ——` 分隔。任一步失败都降级为"本次不落盘"或"改为新建"，不拒绝启动

@@ -92,10 +92,12 @@ run() int
 | 元素 | 签名 | 职责 |
 |---|---|---|
 | `Env` | `type Env struct { Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; History []agentcore.Turn; RestoredNote string; ContextBase, ContextWindow int }` | 进入界面前要准备好的东西：模型名、回合引擎、权限通路、恢复出来的历史（屏幕用；上下文由 `Core.Restore` 自己恢复）、`/context` 的两个常量 |
-| `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer; BuildEnv func(newSession bool) (Env, error); StartREPL func(model string) error }` | 注入版本、输出与环境构造函数；`BuildEnv` 的参数是 `--new`（P4.2 起） |
+| `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer; BuildEnv func(BuildOptions) (Env, error); StartREPL func(model string) error }` | 注入版本、输出与环境构造函数 |
+| `BuildOptions` | `type BuildOptions struct { NewSession, Headless, AllowWrite bool }` | 装配时的三个"能不能动用户东西"的开关；`Headless` 不落盘，`AllowWrite` 只在 `Headless` 下有意义 |
 | `NewRootCommand` | `func NewRootCommand(opts Options) *cobra.Command` | 建 root + `version` + `run` 子命令、注册 `--new`；同时完成汉化 |
 | `runREPL` | `func runREPL(opts Options, newSession bool) error` | 先准备环境（失败则不进界面、退出 1），再把模型名、引擎、历史交给界面 |
-| `buildEnv` | `func buildEnv(opts Options, newSession bool) (Env, error)` | 调注入的构造函数；未注入视为"没有模型、没有引擎"，只测命令树时不必造配置 |
+| `buildEnv` | `func buildEnv(opts Options, build BuildOptions) (Env, error)` | 调注入的构造函数；未注入视为"没有模型、没有引擎"，只测命令树时不必造配置 |
+| `newRunCmd` | `func newRunCmd(opts Options) *cobra.Command` | `run <提示词>`：`--format text|json`、`--allow-write`；非交互执行，输出到 stdout |
 | `newVersionCmd` | `func newVersionCmd(opts Options) *cobra.Command` | 输出 `0.1.0 (build abc1234)` |
 | `newRunCmd` | `func newRunCmd() *cobra.Command` | headless 单回合（P4 实装） |
 | `versionString` | `func versionString(opts Options) string` | 有提交号才带 `(build …)`，避免空括号 |
@@ -609,6 +611,7 @@ type SessionInfo struct {
 | `NewWithSession` | `func NewWithSession(client, registry, guard, perm, system, store *session.Store, sess *session.Session) *Core` | 同上并挂上会话库；**返回具体类型**，因为装配完通常还要补一句 `Restore`，而"恢复"不是界面能力 |
 | `Restore` | `func (c *Core) Restore(turns []session.Turn)` | 转发给 `state.Restore`，只在启动装配时调一次 |
 | `Turn` | `type Turn = session.Turn` | 别名：界面与 `cmd.Env` 传历史时不必 import 存储层 |
+| `AutoApprove` | `type AutoApprove struct{}`，`RequestPermission` 一律返回 `DecisionAllowOnce` | 无界面模式的权限通道（`run --allow-write`）。**不绕过硬拒绝**：`Guard` 判 Denied 的（系统路径、`.git/`、家目录隐藏项）根本走不到它；放行的只是"本来要问用户"的那一类 |
 | `Submit` / `Interrupt` / `Messages` / `Clear` | 四个方法 | 全部转发给 `state`，本身不含逻辑 |
 | `Sessions` | `func (c *Core) Sessions() ([]SessionInfo, error)` | 直接查 `store.List()` 并过滤 0 轮的会话；`store` 在 `Core` 上留一份引用，`appstate` 不必多一个查询入口 |
 | `Restore` | `func (c *Core) Restore(turns []session.Turn)` | 启动装配时灌回上次的历史 |
@@ -681,6 +684,7 @@ type SessionInfo struct {
 | 斜杠命令 | `commands.go`：`command{name, alias, help, run}` 与 `commandList()`。**五条命令一张表**，`/help` 从同一张表渲染，命令与说明因此不会漂移。没有拆成 `commands` 子包：每条命令都要读写 `Model` 状态，搬出去得先把这些能力抽象成接口，对五条命令不划算 |
 | `/clear` | 清 `Core.Clear()` + 记录 + `answer` + `lastPromptTokens`；**会话文件不动**（只追加），所以提示里要说"记录仍然保留" |
 | `/sessions` | 调 `Core.Sessions()` 渲染 `ID · 轮数 · 时间 · 标题`；只列不切 |
+| 无界面入口 | `headless.go`：`ParseFormat`/`RunHeadless`/`writeHeadlessJSON`。与 TUI 共用同一个 `AgentCore` 与事件流，区别只在"谁来读事件"：正文直接写 stdout（text 模式边生成边写），`EventToolResult` 攒成摘要，`EventUsage` 记用量。**不恢复、不落盘**——`run` 是"跑一次就结束"，每次留会话会让 `/sessions` 堆满一次性记录 |
 | `widgets` | 每个组件 `NewXxx(...) Model` + `Update` + `View` |
 | `commands` | `func Register(c Command)`、`func Lookup(name string) (Command, bool)` |
 

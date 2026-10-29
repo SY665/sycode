@@ -38,6 +38,19 @@ type Env struct {
 	ContextWindow int
 }
 
+// BuildOptions 是装配时的选择。三个开关都影响"能不能动用户的东西"，
+// 所以放在一起、由调用方显式给出，而不是从环境里猜。
+type BuildOptions struct {
+	// NewSession 为真时不恢复上次会话（`--new`）。
+	NewSession bool
+	// Headless 为真表示没有界面：不落盘——无界面执行是"跑一次就结束"，
+	// 每次都留一个会话会让 `/sessions` 里堆满一次性记录。
+	Headless bool
+	// AllowWrite 只在 Headless 下有意义：写与执行是否放行（`--allow-write`）。
+	// 默认拒绝：没人看着的时候，安全默认值必须是"不动"。
+	AllowWrite bool
+}
+
 // Options 注入进程级依赖。输出目标可替换，便于测试断言终端文案。
 type Options struct {
 	Version string
@@ -49,8 +62,7 @@ type Options struct {
 	//
 	// 之所以交给调用方延迟执行、而不是在 run() 里算好传进来：版本、帮助不需要密钥，
 	// 提前解析会让 `sycode --version` 在没有 key 的机器上直接失败。
-	// 参数是 `--new`：由调用方决定恢复上次会话还是新建。
-	BuildEnv func(newSession bool) (Env, error)
+	BuildEnv func(BuildOptions) (Env, error)
 
 	// StartREPL 允许测试替换交互入口，参数是已解析的模型名。为空时走真实界面。
 	// 不这样做的话，"无参数启动"的测试会真的把终端交给 Bubble Tea，在交互式终端里跑 go test 时会挂住。
@@ -103,7 +115,7 @@ func NewRootCommand(opts Options) *cobra.Command {
 		return usageErrorf("%s", translateFlagError(err))
 	})
 
-	root.AddCommand(newVersionCmd(opts), newRunCmd())
+	root.AddCommand(newVersionCmd(opts), newRunCmd(opts))
 
 	// 默认恢复本工作目录的上一次会话；--new 明确要求从头开始。
 	root.Flags().BoolVar(&newSession, "new", false, "不恢复上次会话，新建一个")
@@ -124,7 +136,7 @@ func NewRootCommand(opts Options) *cobra.Command {
 // 准备失败（缺密钥、配置写错）属于"用户需要去动手"，不是用法错误：
 // 原样返回让 main 打一行"错误：…"并退出 1，不进入界面，也不刷用法提示。
 func runREPL(opts Options, newSession bool) error {
-	env, err := buildEnv(opts, newSession)
+	env, err := buildEnv(opts, BuildOptions{NewSession: newSession})
 	if err != nil {
 		return err
 	}
@@ -145,11 +157,11 @@ func runREPL(opts Options, newSession bool) error {
 
 // buildEnv 调用注入的构造函数；未注入时按"没有模型、没有引擎"处理，界面照常可用。
 // 这样只测命令树（帮助、版本、参数错误）时不必构造注册表与配置文件。
-func buildEnv(opts Options, newSession bool) (Env, error) {
+func buildEnv(opts Options, build BuildOptions) (Env, error) {
 	if opts.BuildEnv == nil {
 		return Env{}, nil
 	}
-	return opts.BuildEnv(newSession)
+	return opts.BuildEnv(build)
 }
 
 // newVersionCmd 提供 `sycode version`，与 `--version` 等价。
@@ -165,20 +177,46 @@ func newVersionCmd(opts Options) *cobra.Command {
 	}
 }
 
-// newRunCmd 提供 `sycode run "<提示词>"`（headless 单回合）。P4 实装。
-func newRunCmd() *cobra.Command {
-	return &cobra.Command{
+// newRunCmd 提供 `sycode run "<提示词>"`：无界面的单回合执行。
+//
+// 输出到 stdout，进度与错误按"能进管道"的方式给：text 边生成边写，json 最后一次性输出。
+func newRunCmd(opts Options) *cobra.Command {
+	var (
+		format     string
+		allowWrite bool
+	)
+
+	cmd := &cobra.Command{
 		Use:   "run <提示词>",
 		Short: "非交互执行一个回合",
 		Args:  cobra.ArbitraryArgs,
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(c *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				return usageErrorf("run 需要且只需要一个提示词参数，例如 sycode run \"列出当前目录\"")
 			}
-			// 参数已就位，缺的是实现——属于"未实现"而非"用法错误"，退出码 1。
-			return errNotImplemented("headless 模式", "docs/ROADMAP.md P4")
+			parsed, err := repl.ParseFormat(format)
+			if err != nil {
+				// 取值拼错属于用法错误：退出码 2，并给出可选值。
+				return usageErrorf("%s", err)
+			}
+
+			env, err := buildEnv(opts, BuildOptions{Headless: true, AllowWrite: allowWrite})
+			if err != nil {
+				return err
+			}
+			_, err = repl.RunHeadless(c.Context(), env.Core, repl.HeadlessOptions{
+				Prompt: args[0],
+				Format: parsed,
+				Out:    c.OutOrStdout(),
+			})
+			return err
 		},
 	}
+
+	cmd.Flags().StringVar(&format, "format", "text", "输出格式：text 或 json")
+	cmd.Flags().BoolVar(&allowWrite, "allow-write", false,
+		"允许写文件与执行命令（默认拒绝：非交互模式下没有人能确认）")
+	return cmd
 }
 
 // versionString 拼出版本号；有构建提交号时附带，便于用户反馈问题时定位。

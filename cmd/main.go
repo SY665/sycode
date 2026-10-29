@@ -90,7 +90,7 @@ func run() int {
 //
 // 错误原样返回：config/providers 的文案已是中文且带修改指引（CODING-STANDARDS §13），
 // 这里再包一层只会得到"错误：无法准备运行环境：缺少密钥：…"这样的叠词。
-func buildEnv(newSession bool) (cmd.Env, error) {
+func buildEnv(build cmd.BuildOptions) (cmd.Env, error) {
 	registry, err := providers.Load()
 	if err != nil {
 		// 内嵌注册表损坏属于打包错误：用户改不了，但也不能静默退回默认值。
@@ -148,15 +148,39 @@ func buildEnv(newSession bool) (cmd.Env, error) {
 
 	// 权限通路两侧共用同一个对象：工具侧（经 perm）放请求，界面侧（经 Env）取出来弹窗。
 	// 它不能挂在 Core 上——那样引擎得反过来持有界面，装配顺序会成环。
-	perm := agentcore.NewPermissionPrompt()
+	//
+	// 无界面模式下没有人能确认，两条路：默认不给通道（写与执行被拒），
+	// 或 `--allow-write` 显式给一个一律放行的通道。放行也只放开"本来要问用户"的那一类，
+	// 系统路径、`.git/`、家目录隐藏项在 Guard 那一层就被拒了。
+	var (
+		perm   tools.PermissionRequester
+		prompt *agentcore.PermissionPrompt
+	)
+	if build.Headless {
+		if build.AllowWrite {
+			perm = agentcore.AutoApprove{}
+			slog.Warn("非交互模式已开启写权限（--allow-write）")
+		}
+	} else {
+		prompt = agentcore.NewPermissionPrompt()
+		perm = prompt
+	}
 
 	writeRegistry, err := buildTools(guard, perm)
 	if err != nil {
 		return cmd.Env{}, err
 	}
 
-	// 会话：默认续上本工作目录的上一次，--new 则新建。
-	store, sess, history, note := openSession(workDir, newSession)
+	// 会话：交互模式下默认续上次，--new 新建；无界面模式不落盘（跑一次就结束）。
+	var (
+		store   *session.Store
+		sess    *session.Session
+		history []session.Turn
+		note    string
+	)
+	if !build.Headless {
+		store, sess, history, note = openSession(workDir, build.NewSession)
+	}
 
 	// 系统提示只拼一次：它同时要交给引擎、还要用来估算固定开销。
 	system := llm.Build(promptEnv(resolved.ModelID, workDir))
@@ -173,9 +197,10 @@ func buildEnv(newSession bool) (cmd.Env, error) {
 	slog.Debug("上下文占用基线", "base_tokens", base, "window", contextWindow, "window_known", ok)
 
 	return cmd.Env{
-		Model:         resolved.ModelID,
-		Core:          core,
-		Permission:    perm,
+		Model: resolved.ModelID,
+		Core:  core,
+		// 无界面模式没有弹窗对象可交，界面侧本来就拿不到它。
+		Permission:    prompt,
 		History:       history,
 		RestoredNote:  note,
 		ContextBase:   base,

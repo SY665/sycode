@@ -84,17 +84,58 @@ func TestRunCmd_RequiresExactlyOneArg(t *testing.T) {
 	}
 }
 
-func TestRunCmd_NotImplementedHasExitCodeOne(t *testing.T) {
+func TestRunCmd_WithoutEngineFailsCleanly(t *testing.T) {
+	// 没注入装配函数时（只测命令树），run 应给出可操作的错误而不是 panic。
 	_, _, err := newTestRoot(t, "run", "列出当前目录")
 	if err == nil {
-		t.Fatal("未实现的命令应返回错误")
+		t.Fatal("没有引擎时应返回错误")
 	}
-	// 参数正确但功能未做：必须是 1 而不是 2，脚本才能区分"敲错"与"没做"。
 	if code := ExitCode(err); code != 1 {
-		t.Errorf("未实现属于一般错误，期望退出码 1，实际 %d", code)
+		t.Errorf("一般错误应为退出码 1，实际 %d", code)
 	}
-	if !strings.Contains(err.Error(), "尚未实现") {
-		t.Errorf("错误信息应说明尚未实现，实际：%v", err)
+	if !strings.Contains(err.Error(), "没有可用的模型客户端") {
+		t.Errorf("错误应指出缺什么，实际：%v", err)
+	}
+}
+
+func TestRunCmd_RejectsUnknownFormat(t *testing.T) {
+	// 取值拼错是用法错误（2），并要在提示里列出可选值。
+	_, _, err := newTestRoot(t, "run", "--format", "yaml", "列出当前目录")
+	if err == nil {
+		t.Fatal("非法格式应返回错误")
+	}
+	if code := ExitCode(err); code != 2 {
+		t.Errorf("用法错误应为退出码 2，实际 %d", code)
+	}
+	if !strings.Contains(err.Error(), "text / json") {
+		t.Errorf("应提示可选值，实际：%v", err)
+	}
+}
+
+func TestRunCmd_PassesHeadlessAndAllowWrite(t *testing.T) {
+	// --allow-write 必须真的传到装配层：没传到的话，非交互模式会静默地
+	// 一直拒绝写操作，而用户以为自己已经授权了。
+	var got BuildOptions
+	root := NewRootCommand(Options{
+		Version: "0.1.0",
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		BuildEnv: func(build BuildOptions) (Env, error) {
+			got = build
+			return Env{}, nil
+		},
+	})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"run", "--allow-write", "列出当前目录"})
+
+	_ = root.Execute()
+
+	if !got.Headless {
+		t.Error("run 必须以 headless 模式装配")
+	}
+	if !got.AllowWrite {
+		t.Error("--allow-write 没有传下去")
 	}
 }
 
@@ -132,7 +173,7 @@ func TestRootCommand_PassesResolvedModelToREPL(t *testing.T) {
 		Version: "0.1.0",
 		Stdout:  &bytes.Buffer{},
 		Stderr:  &bytes.Buffer{},
-		BuildEnv: func(bool) (Env, error) {
+		BuildEnv: func(BuildOptions) (Env, error) {
 			return Env{Model: "deepseek-chat"}, nil
 		},
 		StartREPL: func(model string) error {
@@ -157,7 +198,7 @@ func TestRootCommand_ResolveFailureSkipsREPL(t *testing.T) {
 		Version: "0.1.0",
 		Stdout:  &bytes.Buffer{},
 		Stderr:  &bytes.Buffer{},
-		BuildEnv: func(bool) (Env, error) {
+		BuildEnv: func(BuildOptions) (Env, error) {
 			return Env{}, errors.New(`缺少密钥：请设置环境变量 OPENAI_API_KEY（供应商 "openai"）`)
 		},
 		StartREPL: func(string) error {
@@ -190,7 +231,7 @@ func TestRootCommand_VersionDoesNotResolveModel(t *testing.T) {
 		Version: "0.1.0",
 		Stdout:  &bytes.Buffer{},
 		Stderr:  &bytes.Buffer{},
-		BuildEnv: func(bool) (Env, error) {
+		BuildEnv: func(BuildOptions) (Env, error) {
 			called = true
 			return Env{}, errors.New("不应该被调用")
 		},
@@ -264,8 +305,8 @@ func TestRootCommand_NewFlagChoosesFreshSession(t *testing.T) {
 				Version: "0.1.0",
 				Stdout:  &bytes.Buffer{},
 				Stderr:  &bytes.Buffer{},
-				BuildEnv: func(newSession bool) (Env, error) {
-					got, called = newSession, true
+				BuildEnv: func(build BuildOptions) (Env, error) {
+					got, called = build.NewSession, true
 					return Env{}, nil
 				},
 				StartREPL: func(string) error { return nil },
