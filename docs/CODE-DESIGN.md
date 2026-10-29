@@ -100,8 +100,8 @@ run() int
 | `Init` | `func Init() (cleanup func(), path string, err error)` | 建目录、开文件、装 handler、`slog.SetDefault` |
 | `parseLevel` | `func parseLevel(s string) slog.Level` | `SYCODE_LOG_LEVEL` → level，未知值回退 info |
 | `logDir` | `func logDir() (string, error)` | `~/.sycode/logs`，权限 0700 |
-| `createFile` | `func createFile(dir string) (*os.File, error)` | `sycode-<ts>.log`，权限 0600 |
-| `newHandler` | `func newHandler(w io.Writer, level slog.Level) slog.Handler` | 终端用可读格式、文件用 JSON |
+| `createFile` | `func createFile(dir string) (*os.File, string, error)` | `sycode-20060102-150405.log`，权限 0600；同时返回路径供 `Init` 交给调用方（只返回 `*os.File` 则 `Init` 要重算一遍文件名） |
+| `newHandler` | `func newHandler(w io.Writer, level slog.Level) slog.Handler` | 只产出**文件用 JSON** handler。v0.1 不向终端输出日志：Bubble Tea 接管屏幕后写 stderr 会破坏渲染；终端可读格式留给 P4 的 TUI 面板 |
 
 测试点：级别解析全部取值；目录不可写时返回错误而非 panic。
 
