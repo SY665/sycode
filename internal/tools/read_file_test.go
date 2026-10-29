@@ -44,7 +44,8 @@ func writeFile(t *testing.T, dir, name, content string) string {
 	return path
 }
 
-func mustExecute(t *testing.T, tool *ReadFileTool, in Input) Result {
+// mustExecute 执行工具并要求成功；参数用 Tool 接口，读/找/搜三类工具共用。
+func mustExecute(t *testing.T, tool Tool, in Input) Result {
 	t.Helper()
 	result, err := tool.Execute(context.Background(), in)
 	if err != nil {

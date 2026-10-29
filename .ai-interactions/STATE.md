@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 20:50 | 阶段：**P3** | 当前单元：3.2 已完成，下一单元 3.3（`read_file` / `glob` / `grep`）
+更新时间：2026-10-29 21:20 | 阶段：**P3** | 当前单元：3.3 已完成，下一单元 3.4（`write_file` / `edit_file`）
 
 ## 已完成（本阶段）
 
@@ -52,23 +52,28 @@
   - 契约：`Tool`(5 方法)/`Validator`/`PermissionRequester`、`Result{Content, Display, Artifact}`、`Schema`（**独立于 llm.ToolSchema**）
   - `Registry`：nil/空名/重名报错，`All`/`Schemas` 顺序稳定且返回副本
   - `Decision` 零值 = `DecisionDeny`；`clip` 截到 32KiB、按 rune 收尾、切在行边界（**首个消费方是 3.3 的 read_file**）
-- 代码 6,491 行（源码 3,081 / 测试 3,610），22 笔提交；直接依赖 7 个
-- 记录：`output-1..2_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 3.3 已收口（`read_file` 245 + `input` 106 + `permission` 75；`pattern` 122 + `glob` 211 + `grep` 338）：
+  - `read_file`：分段、二进制探测、16MiB 后建议 grep、32KiB 截断提示；**给模型的内容不带行号**（行号只进 `Display`）
+  - `input.go` 不用裸类型断言（`Execute` 永不 panic）；`permission.go` 是三态 → 文案的唯一映射点
+  - `pattern.go`：**glob 模式转正则**（`**/` 与尾部 `/**` 都匹配零层，Windows 加 `(?i)`）；不支持 `{a,b}`
+  - `glob`/`grep`：跳过 `.git` 与被忽略目录、起点只问一次权限、限量与截断提示；`grep` 单行上限 256KiB 且不破坏后续行号
+- 代码 8,460 行（源码 4,194 / 测试 4,266），24 笔提交；直接依赖 7 个
+- 记录：`output-1..3_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P3 单元 3.3 —— `read_file` / `glob` / `grep`**（三个工具文件 + 一个共用 input 解析）：
+**P3 单元 3.4 —— `write_file` / `edit_file`**（2 个工具文件 + diff 生成）：
 
-1. `read_file.go`：`NewReadFileTool(guard *filesystem.Guard) *ReadFileTool`；`ValidateInput` 校验 `path`（必填/字符串）、`offset`/`limit`（正整数）；`Execute` 走 `guard.Check(path, OpRead)` → 读 → `clip` 截断（超限写 artifact 并给路径）→ `Display{Kind: DisplayList}`
-2. `glob.go`：`*.go` 与 `**` 语义（用 `doublestar`？**没有**在选型表里——先用手写分段匹配，或停下来问人）；`include` 过滤；结果按路径排序并限量
-3. `grep.go`：正则 + 文件过滤 + 行号；跳过二进制与 `.gitignore` 忽略项
-4. 共用：`input.go` 里的 `requireString(in, "path")` / `optionalInt(in, "limit", 默认)` —— 报错格式照 CODING-STANDARDS §13：`参数错误：缺少必填字段 "path"。请带上 {"path":"…"} 重试。`
-5. 验收：越界路径被 Guard 拒绝且**副作用为零**；超限结果截断且 `Artifact` 有值；`参数错误` 中文可读
+1. `write_file.go`：`NewWriteFileTool(guard, perm)`；`path` + `content`；`Execute` 走 `OpWrite`（工作目录内是 `Pending` → 必须问）；写之前 `MkdirAll` 父目录；**写后回读校验**（避免部分写入却报告成功）
+2. `edit_file.go`：`old_string`/`new_string` 精确替换。按 CODE-DESIGN §4：
+   `locateMatches(content, old) ([]int, error)`（0 或 >1 直接失败并给候选行号）→ `applyReplace` → `buildDiff(old, new) []EditDiffLine`
+3. diff：`Display{Kind: DisplayDiff}`；**不引第三方 diff 库**——现在只需要"逐行对比 + 上下文"，先用朴素 LCS 或前后缀裁剪（选型表里的 `go-udiff` 留给 3.7 的界面渲染，届时若真的需要再讨论）
+4. 验收：歧义匹配（出现两次）失败并列出候选行号；`old_string` 不存在 → `执行失败：` + 提示用 grep 确认；写操作**副作用为零**当权限被拒
 
-**开工前要定的一件事**：`**` 递归通配是自己写（按 `/` 切段回溯）还是引 `bmatcuk/doublestar`？
-后者在选型表外，需要问用户；我倾向自己写（约 40 行 + 表驱动测试），因为只用一种模式语法，引依赖不划算。
+**注意**：写操作是第一次真正"改用户的文件"，因此 `Pending → 允许` 这条路径必须有测试；
+另外 `edit_file` 的原子性：先写临时文件再 `Rename`，避免写一半断电留下半截源码。
 
-## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
+## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
 
 - 工具 shell 的 PATH 被裁剪：`go` 不可见 → 先 `source scripts/env.sh`（不是没装）
 - `go build ./...` 会把 main 包二进制写到当前目录 → `scripts/check.sh` 已改成 `-o <临时目录>/`

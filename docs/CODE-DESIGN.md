@@ -293,6 +293,43 @@ type PermissionRequester interface {   // 由 UI 实现，注入给工具
 
 **每个工具必须恰好有这 5 个方法 + 构造器**；不允许加 `BeforeExecute`、`PostHook` 这类钩子（要加就走 ADR）。
 
+### `pattern.go`（glob 匹配）
+
+模式不手写回溯匹配，而是**翻译成正则**：段级回溯要同时处理 `**` 跨层、`*` 不跨层、字符集与转义，
+边界记不住；翻译是单向的，正确性靠表驱动测试压住。
+
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `compileGlob` | `func compileGlob(pattern string) (*regexp.Regexp, error)` | `*`→`[^/]*`、`?`→`[^/]`、`**/`→`(?:.*/)?`（零层也匹配）、尾部 `/**`→`(?:/.*)?`、`[...]`→正则字符集；Windows 加 `(?i)`；`\` 先规整成 `/` |
+| `translateClass` | `func translateClass(class string) (string, error)` | glob 的 `[!abc]` → 正则的 `[^abc]`；`\`/`]`/`^` 转义 |
+| `matchPattern` | `func matchPattern(pattern, path string) bool` | 便捷包装，仅测试与小场景使用 |
+
+**已知限制**：不支持 `{a,b}` 花括号展开；`[a-z]` 区间按字节交给正则，多字节字符集不要用。
+
+### `glob.go`
+
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `NewGlobTool` | `func NewGlobTool(guard *filesystem.Guard, perm PermissionRequester) *GlobTool` | |
+| `Execute` | 校验 → 起点问一次权限 → `WalkDir` → 匹配 → 限量 | **起点只问一次**：用户已为"在这个目录里找"点过头，再为每个文件弹窗会把人逼疯 |
+| `walk` | `func (t *GlobTool) walk(root, pattern string, limit int) (matches []string, visited int, truncated bool)` | 跳过 `.git/.svn/.hg`；被忽略的目录 `SkipDir`；用 `WalkDir` 的字典序保证输出稳定 |
+
+常量：`defaultGlobLimit = 200`、`maxGlobLimit = 2000`、`maxGlobVisited = 50000`。
+输出是相对起点的路径（用 `/`），空结果会明确说"没有匹配"并给出放宽建议。
+
+### `grep.go`
+
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `NewGrepTool` | `func NewGrepTool(guard *filesystem.Guard, perm PermissionRequester) *GrepTool` | |
+| `Execute` | 校验（含正则编译）→ 起点问权限 → 遍历 → 汇总 | 命中格式 `路径:行号: 内容` |
+| `search` | 目录或单文件都走这一条 | 单文件起点把基准挪到父目录，结果里显示文件名而不是 `.` |
+| `searchFile` | 逐行匹配 | 二进制/超 4MiB/读不了的文件静默跳过（噪声不是错误） |
+| `readLimitedLine` | `func readLimitedLine(reader *bufio.Reader) (line string, got bool, err error)` | 单行上限 256KiB；超长时交回前缀（仍可匹配）并丢弃剩余部分，否则行号会错位 |
+
+常量：`defaultGrepLimit = 100`、`maxGrepLimit = 500`、`maxGrepFileBytes = 4MiB`、`grepLineBytes = 256KiB`。
+`ctx` 取消 → `超时：搜索被取消`（不让 UI 停在一个永远转圈的搜索上）。
+
 ### `edit_file.go` 的额外约定
 
 `Execute` 内部必须走三段：`locateMatches(content, old) ([]int, error)`（0 或 >1 直接失败并返回候选行号）→ `applyReplace(...)` → `buildDiff(old, new) []EditDiffLine`。三个都是私有纯函数，各有单测。

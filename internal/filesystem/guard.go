@@ -190,6 +190,22 @@ func (g *Guard) IsBlocked(resolved string) bool {
 	return hit
 }
 
+// IsIgnored 判断路径是否被 .gitignore 忽略（工作目录外的路径按"不忽略"处理）。
+//
+// 单独开这个入口是给遍历型工具剪枝用的：它们要在走进子目录之前决定跳不跳，
+// 逐个别调 Check 会做符号链接解析与整张黑名单比对，代价高且答非所问。
+// 判定本身仍走同一份 GitAwareness，所以与 Check 里的忽略规则必然一致。
+func (g *Guard) IsIgnored(path string) bool {
+	if g.git == nil {
+		return false
+	}
+	resolved, err := g.Resolve(path)
+	if err != nil {
+		return false
+	}
+	return g.git.IsIgnored(resolved)
+}
+
 // insideWorkDir 判断是否在工作目录内（含工作目录本身）。
 func (g *Guard) insideWorkDir(resolved string) bool {
 	return g.workDir != "" && isUnder(g.workDir, resolved)

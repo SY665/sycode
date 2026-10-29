@@ -5,6 +5,8 @@
 ## [Unreleased]
 
 ### Added
+- `internal/tools/glob.go` + `pattern.go`：`glob` 工具与**自己实现的 glob 匹配**（模式转正则：`*`/`?`/`**`（零层也匹配）/`[abc]`/`[!abc]`，Windows 大小写不敏感）；跳过 `.git` 与被忽略目录，输出字典序（两次调用结果一致）
+- `internal/tools/grep.go`：`grep` 工具（Go 正则、`include` glob 过滤、`路径:行号: 内容`）；跳过二进制、超 4MiB 文件与忽略项；单行上限 256KiB 且超长行不影响后续行号
 - `internal/tools/read_file.go`：`read_file` 工具（分段 `offset`/`limit`、16MiB 上限后建议用 grep、二进制探测、32KiB 截断并提示续读）；**给模型的内容不带行号**（避免行号被写进 `old_string`），行号只进 `Display`
 - `internal/tools/input.go` + `permission.go`：参数解析（不裸断言，类型错给中文示例）与权限通道收口（三态 → 文案只此一处，拒绝的文案像决定而不像故障）
 - `internal/tools`：`Tool`/`Validator`/`PermissionRequester` 契约、`Result`（含 `Display` 结构化展示与 `Artifact` 落盘路径）、`Schema`；`Registry`（注册顺序稳定、重名报错、`Schemas` 返回副本）；`clip` 把超长结果截到 32KiB 且不切断多字节字符
