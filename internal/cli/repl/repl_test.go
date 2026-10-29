@@ -34,6 +34,10 @@ type fakeCore struct {
 	submitErr error
 	interrupt int
 	inputs    []string
+	// sessions 供 /sessions 使用；sessionsErr 用来测"读不出来"那条分支。
+	sessions    []agentcore.SessionInfo
+	sessionsErr error
+	cleared     int
 }
 
 func (f *fakeCore) Submit(_ context.Context, input string) (<-chan llm.StreamEvent, error) {
@@ -51,7 +55,10 @@ func (f *fakeCore) Submit(_ context.Context, input string) (<-chan llm.StreamEve
 
 func (f *fakeCore) Interrupt()              { f.interrupt++ }
 func (f *fakeCore) Messages() []llm.Message { return nil }
-func (f *fakeCore) Clear()                  {}
+func (f *fakeCore) Clear()                  { f.cleared++ }
+func (f *fakeCore) Sessions() ([]agentcore.SessionInfo, error) {
+	return f.sessions, f.sessionsErr
+}
 
 // runCmd 执行一条 tea.Cmd 并把结果喂回 Update，模拟 Bubble Tea 的调度。
 func runCmd(t *testing.T, m Model, cmd tea.Cmd) (Model, tea.Cmd) {

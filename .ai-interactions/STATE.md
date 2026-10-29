@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 24:55 | 阶段：**P4** | 当前单元：4.1–4.4 全部收口，下一单元 4.5（`/clear`、`/sessions`、`/help`）
+更新时间：2026-10-29 25:20 | 阶段：**P4** | 当前单元：4.1–4.5 收口，下一单元 4.6（headless `sycode run`）
 
 ## 已完成（本阶段）
 
@@ -145,26 +145,40 @@
     **不必为它扩 `AgentCore` 接口**（常见实现是把 `GetLastUsage` 放进接口的）
   - 分类明细由界面用 `Core.Messages()` 算，不像常见实现那样在引擎里暴露 `GetContextBreakdown`（只有界面要用）
   - 固定开销（系统提示 + 6 个工具 schema）在装配时算一次传下去：冒烟实测 **2795 token / 128k**
-- 代码 14,031 行（源码 7,043 / 测试 6,988），37 笔提交；直接依赖 7 个
-- 记录：`output-1..5_impl-*.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 4.5 已收口（`repl/commands.go` 150 + 测试 150；`agentcore` 接口 +25）
+  - **五条命令一张表**：`/clear`、`/context`、`/help`、`/sessions`、`/exit`（别名 `/quit`）。
+    `/help` 从同一张表渲染——写死两份说明早晚漂移；测试直接遍历表断言"每条都出现在帮助里"
+  - `commandList()` 写成函数而不是包级变量：`showHelp` 读表、表里的 `run` 又指向 `showHelp`，
+    写成变量是初始化环（编译期就报 `initialization cycle`）
+  - `/clear` **不碰会话文件**（只追加的账本），提示里明说"记录仍然保留"，否则用户以为磁盘也空了
+  - `/sessions` 过滤 **0 轮空壳**：启动过但一句话没说的会话列出来只会让人以为里面有东西
+  - **`AgentCore` 加 `Sessions()`——唯一一次为展示需求扩接口，已获用户同意**。
+    另一条路（给 `repl.Deps` 传 `*session.Store`）会让 UI 依赖存储层，分层就破了
+  - `store` 在 `Core` 上留引用，`appstate` 不多一个查询入口：列会话是"读存储"，与回合状态机无关
+  - 没有拆 `commands` 子包：每条命令都要读写 `Model` 状态，搬出去得先抽象一堆接口，
+    对五条命令不划算（文档已改口径，写明"等命令需要互相组合时再拆"）
+  - 未知斜杠命令**按普通输入处理**（现状，有测试钉住）；要加"未知命令"提示时先改那条测试
+- 代码 14,424 行（源码 7,233 / 测试 7,191），38 笔提交；直接依赖 7 个
+- 记录：`output-1..6_impl-*.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P4 单元 4.5 —— `/clear`、`/sessions`、`/help`**（`repl`，纯 UI + 一条清库路径）
+**P4 单元 4.6 —— headless `sycode run "…"`**（`cmd/root.go` + 新的单回合入口）
 
-1. 先抽命令表：`repl.go` 里已有 `/exit`、`/context` 两个字符串判断，再加三条就该有注册表了
-   （`CODE-DESIGN` §9 的 `commands` 子包）。v0.1 只需要 `type command struct{ name, help string; run func(Model) (tea.Model, tea.Cmd) }`
-   加一个切片，别做成插件系统
-2. `/clear`：`Core.Clear()` + 清 `m.transcript` + 清 `m.lastPromptTokens`。
-   **会话文件不截断**（只追加），所以清空后历史里会出现"空档"——要在记录里说一句"已清空上下文（会话记录保留）"
-3. `/sessions`：调 `Store.List()` 列出本目录会话（ID / 轮数 / 标题 / 更新时间）。
-   但 `repl` 没有 `Store` —— **两条路**：给 `Deps` 传 `*session.Store`（界面直接读存储，破了"界面不碰存储"的分层），
-   或在 `agentcore` 加只读方法（扩接口）。**这一条开工前问人**，我倾向后者加一个 `Sessions() []SessionInfo`，
-   顺便把"0 轮的空会话"过滤掉
-4. `/help`：把命令表自己渲染出来，顺带提一句 `Esc` / `Ctrl+C` 的行为
-5. 验收：五条命令都能用；`/help` 列出的与真实存在的一致（从同一张表来，写死两份必然漂移）
+1. `newRunCmd` 现在只返回"尚未实现"。改成：解析配置（复用 `buildEnv` 的逻辑，但**不需要 TUI**）
+   → `Core.Submit(ctx, prompt)` → 把 `EventText` 直接写到 stdout → 终态退出码 0/1
+2. 关键决定：**headless 不落盘**还是**也落盘**？
+   落盘要 `openSession(workDir, true)`（每次新会话）并追加 user/assistant——好处是脚本调用也能回溯；
+   坏处是 `sycode run` 一天几十次会在 `~/.sycode/sessions` 里堆一堆。**建议不落盘**，除非 `--save`
+3. `--format json`：输出 `{text, tools:[{name,ok,summary}], usage:{prompt,completion,total}}`。
+   `usage` 来自 `EventUsage`（4.4 刚接上）
+4. 工具权限怎么办：headless 没有弹窗，`perm` 必须传 `nil`（只读模式），并在 stderr 提示
+   "非交互模式下写与执行会被拒绝"。**这比偷偷放行安全**，也和 P3 的默认值一致
+5. 验收：`sycode run "列出当前目录的文件"` 能流式打印并退出 0；需要写文件的操作被拒且退出码 1
 
-**别顺手做**：会话切换（`/sessions` 只列不切，切换要先定"切了之后当前回合怎么办"）、`/compact`（P6）。
+**这一格唯一需要问人的点**：第 2 条"headless 要不要落盘"。我倾向不落盘（与 `--save` 一起留到 P6）。
+
+**别顺手做**：`--resume`、`--model` 覆盖（后者已在 `Resolve` 里预留了空串参数，接上即可但要另测）。
 
 ## 已知坑 / 需要绕过的东西
 

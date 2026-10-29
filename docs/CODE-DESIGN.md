@@ -584,8 +584,21 @@ type AgentCore interface {
     Interrupt()
     Messages() []llm.Message
     Clear()
+    Sessions() ([]SessionInfo, error)   // P4.5 加：列本目录历史会话，只列不切
+}
+
+// SessionInfo 是给界面的会话摘要：认得出是哪次对话就够，全量事件属于 Restore。
+type SessionInfo struct {
+    ID      string
+    Title   string
+    Turns   int
+    Updated time.Time
 }
 ```
+
+> `Sessions` 是**唯一一次为展示需求扩接口**（2026-10-29，经人同意）。取舍：另一条路是给
+> `repl.Deps` 传 `*session.Store`，界面直接读存储——那会让 UI 依赖存储层，分层就破了。
+> 扩接口的代价是一次性同步文档；破分层的代价是以后每次改存储都要看界面有没有偷偷用到。
 
 `adapter.go`（薄包装，只转发给 `appstate`）：
 
@@ -597,6 +610,8 @@ type AgentCore interface {
 | `Restore` | `func (c *Core) Restore(turns []session.Turn)` | 转发给 `state.Restore`，只在启动装配时调一次 |
 | `Turn` | `type Turn = session.Turn` | 别名：界面与 `cmd.Env` 传历史时不必 import 存储层 |
 | `Submit` / `Interrupt` / `Messages` / `Clear` | 四个方法 | 全部转发给 `state`，本身不含逻辑 |
+| `Sessions` | `func (c *Core) Sessions() ([]SessionInfo, error)` | 直接查 `store.List()` 并过滤 0 轮的会话；`store` 在 `Core` 上留一份引用，`appstate` 不必多一个查询入口 |
+| `Restore` | `func (c *Core) Restore(turns []session.Turn)` | 启动装配时灌回上次的历史 |
 
 > P2 曾有一个 `Direct`（自带历史与取消句柄），P3.6 起改成 `appstate` 的薄包装并删除了 `Direct`：
 > 历史与循环只能有一处实现，留两套必然分叉。`repl` 一行都没改——这正是当初留这道缝的目的。
@@ -663,6 +678,9 @@ type AgentCore interface {
 | `markdown` | `func Render(src string, width int, th theme.Theme) string` |
 | `permissions` | 暂未单独成包：弹窗状态只有 `Model.pending` 一个字段，拆包要多一层转发；功能长大（选择器、批量授权）时再按常见实现拆出 `requester.go`/`selector.go` |
 | `context_status.go` 的对应物 | `context.go`：`contextUsage`/`contextUsageFor`/`renderContext`/`formatTokens`/`padLabel`。分类明细由界面用 `Core.Messages()` 算，不像常见实现那样在引擎里暴露 `GetContextBreakdown`——那三个数只有界面要用 |
+| 斜杠命令 | `commands.go`：`command{name, alias, help, run}` 与 `commandList()`。**五条命令一张表**，`/help` 从同一张表渲染，命令与说明因此不会漂移。没有拆成 `commands` 子包：每条命令都要读写 `Model` 状态，搬出去得先把这些能力抽象成接口，对五条命令不划算 |
+| `/clear` | 清 `Core.Clear()` + 记录 + `answer` + `lastPromptTokens`；**会话文件不动**（只追加），所以提示里要说"记录仍然保留" |
+| `/sessions` | 调 `Core.Sessions()` 渲染 `ID · 轮数 · 时间 · 标题`；只列不切 |
 | `widgets` | 每个组件 `NewXxx(...) Model` + `Update` + `View` |
 | `commands` | `func Register(c Command)`、`func Lookup(name string) (Command, bool)` |
 

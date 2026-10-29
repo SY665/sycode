@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **斜杠命令表**（P4.5）：`/clear`、`/context`、`/help`、`/sessions`、`/exit`（别名 `/quit`）收进一张 `command` 表，`/help` 从同一张表渲染——命令与说明不可能漂移。`/clear` 清上下文与会话缓冲但**不碰会话文件**（只追加的账本），提示里明说"记录仍然保留"；`/sessions` 列出本目录会话（`ID · 轮数 · 时间 · 标题`，过滤掉 0 轮的空壳），**只列不切**。`AgentCore` 因此多一个 `Sessions()`（唯一一次为展示需求扩接口，经人同意；另一条路是让界面直接持有 `*session.Store`，那会破分层）
 - **`/context`**（P4.4）：分类明细（系统提示与工具 / 用户消息 / 助手回复 / 工具结果）+ 合计 `≈12.3k / 128k（9.6%）`。**窗口未知时显示"上限未知"而不是 0%**；有供应商上报的 `PromptTokens` 时以它为准并标注"（供应商上报）"，否则标注"（估算）"。`llm.EstimateTokens`（字节/3，中文一字约一 token）、`providers.GetModelContextWindow`（返回是否已知，不编默认值）、`appstate` 在终态前补发 `EventUsage`（此前 `EventUsage` 有定义但没有生产者）
 - **会话恢复**（P4.2 后半）：启动默认续上本工作目录的上一次会话，`--new` 强制新建。`Store.Open` 重开已有会话并把序号从最后一条有效事件续上；`appstate.Restore` 把投影灌回上下文（**只放正文**：tool 消息必须挂在带 id 的 `tool_calls` 后面，而库里只有摘要）；界面把恢复的历史画出来，并加一行 `已恢复 <ID>（N 轮）` 与 `—— 以上是上次会话 ——` 分隔。任一步失败都降级为"本次不落盘"或"改为新建"，不拒绝启动
 - **回合落库**（P4.2 前半）：`appstate.runTurn` 在回合开始写 `user_message`、结束时写 `assistant_turn`（正文 + 这一轮的工具摘要，只存摘要首行）。`defer` 落库，所以正常结束、出错、`Esc` 中断都会留下已经说过的话；一个字都没产出的空回合不写。**写失败只 `slog.Warn`**——存不下历史不该让对话中断。`agentcore.NewWithSession` 负责装配（`New` 保持不落盘），`main.openSession` 在建库失败时降级为"本次不落盘"而不是拒绝启动

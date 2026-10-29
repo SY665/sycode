@@ -8,9 +8,21 @@ package agentcore
 
 import (
 	"context"
+	"time"
 
 	"github.com/sy665/sycode/internal/llm"
 )
+
+// SessionInfo 是一个历史会话的摘要，供界面列表使用。
+//
+// 只给"认得出这是哪次对话"所需的字段：全量事件属于恢复逻辑（`Restore`），
+// 界面拿它没用。
+type SessionInfo struct {
+	ID      string
+	Title   string
+	Turns   int
+	Updated time.Time
+}
 
 // AgentCore 是界面能看到的一切。
 type AgentCore interface {
@@ -27,4 +39,10 @@ type AgentCore interface {
 
 	// Clear 清空历史。
 	Clear()
+
+	// Sessions 列出本工作目录的历史会话，最近更新的在前。
+	//
+	// 只列不切：切换会话要先定"进行中的回合怎么办"，那是另一件事。
+	// 没有会话库（未落盘、或建库失败）时返回空列表，而不是错误。
+	Sessions() ([]SessionInfo, error)
 }

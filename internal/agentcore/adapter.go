@@ -19,6 +19,8 @@ type Turn = session.Turn
 // 将来换回合实现（加压缩、加子代理）时，界面一行都不用改——这正是 P2 留这道缝的目的。
 type Core struct {
 	state *appstate.State
+	// store 留一份引用：列会话是"读存储"，不该让 appstate（回合状态机）多一个查询入口。
+	store *session.Store
 }
 
 // 编译期确认它满足接口：漏一个方法在这里就报错，而不是等装配时才炸。
@@ -39,15 +41,18 @@ func New(client llm.Client, registry *tools.Registry, guard *filesystem.Guard,
 // 灌回来），而"恢复"不是界面能力，不该塞进 AgentCore 接口。
 func NewWithSession(client llm.Client, registry *tools.Registry, guard *filesystem.Guard,
 	perm tools.PermissionRequester, system string, store *session.Store, sess *session.Session) *Core {
-	return &Core{state: appstate.New(appstate.Deps{
-		Client:  client,
-		Tools:   registry,
-		Guard:   guard,
-		Perm:    perm,
-		Store:   store,
-		Session: sess,
-		System:  system,
-	})}
+	return &Core{
+		state: appstate.New(appstate.Deps{
+			Client:  client,
+			Tools:   registry,
+			Guard:   guard,
+			Perm:    perm,
+			Store:   store,
+			Session: sess,
+			System:  system,
+		}),
+		store: store,
+	}
 }
 
 // Submit 起一个回合。
@@ -66,3 +71,31 @@ func (c *Core) Clear() { c.state.Clear() }
 
 // Restore 把上次会话的历史灌回来。只应在启动装配时调用一次。
 func (c *Core) Restore(turns []session.Turn) { c.state.Restore(turns) }
+
+// Sessions 列出本工作目录的历史会话。
+//
+// 过滤掉 0 轮的会话：那是"启动过但一句话没说"留下的空壳，
+// 列出来只会让人以为里面有东西可恢复。
+func (c *Core) Sessions() ([]SessionInfo, error) {
+	if c.store == nil {
+		return nil, nil
+	}
+	summaries, err := c.store.List()
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]SessionInfo, 0, len(summaries))
+	for _, summary := range summaries {
+		if summary.Turns == 0 {
+			continue
+		}
+		out = append(out, SessionInfo{
+			ID:      summary.ID,
+			Title:   summary.Title,
+			Turns:   summary.Turns,
+			Updated: summary.Updated,
+		})
+	}
+	return out, nil
+}

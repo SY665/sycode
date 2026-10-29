@@ -202,13 +202,9 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	}
 	m.input.Reset()
 
-	if text == "/exit" || text == "/quit" {
-		m.quitting = true
-		return m, tea.Quit
-	}
-	if text == "/context" {
-		m.append(m.renderContext(m.contextUsageFor()))
-		return m, nil
+	// 斜杠命令不进对话：它们在 commands.go 的表里，/help 渲染的也是这张表。
+	if cmd, ok := lookupCommand(text); ok {
+		return cmd.run(m)
 	}
 
 	m.append("› " + text)

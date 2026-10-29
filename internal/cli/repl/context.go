@@ -127,12 +127,17 @@ func trimZero(v float64) string {
 }
 
 // padLabel 按字符数补齐标签，让数字列对齐。
+func padLabel(label string) string { return pad(label, labelColumn) }
+
+// labelColumn 是 /context 里标签列的宽度（最长的是"系统提示与工具"，7 个字）。
+const labelColumn = 7
+
+// pad 按字符数右补空格。
 //
 // 中文在终端里占两列，所以补齐到固定"字数"就够了；用 %-14s 按字节补会错位。
-func padLabel(label string) string {
-	const width = 7
-	if runes := len([]rune(label)); runes < width {
-		return label + strings.Repeat(" ", width-runes)
+func pad(s string, width int) string {
+	if runes := len([]rune(s)); runes < width {
+		return s + strings.Repeat(" ", width-runes)
 	}
-	return label
+	return s
 }
