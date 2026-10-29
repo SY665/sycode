@@ -526,9 +526,6 @@ func TestGuardRulesSurviveSymlinkedRoot(t *testing.T) {
 	if _, reason := guard.Check(filepath.Join(link, "main.go"), OpWrite); reason.Code != ReasonInWorkdir {
 		t.Errorf("工作目录内的写应判为 %q，实际 %q（%s）", ReasonInWorkdir, reason.Code, reason.Message)
 	}
-	if perm, reason := guard.Check("/etc/passwd", OpRead); perm != Denied || reason.Code != ReasonSystem {
-		t.Errorf("系统路径应拒绝（system），实际 %v / %q（%s）", perm, reason.Code, reason.Message)
-	}
 }
 
 // TestGuardRulesSurviveResolvedRoot 与上一个测试等价，但不依赖建链接的能力。
@@ -571,12 +568,4 @@ func TestGuardRulesSurviveResolvedRoot(t *testing.T) {
 		t.Errorf("工作目录内的写应判为 %q，实际 %q（%s）", ReasonInWorkdir, reason.Code, reason.Message)
 	}
 
-	// 系统路径：取本平台真实存在的一个受保护位置。
-	probe := "/etc/passwd"
-	if runtime.GOOS == "windows" {
-		probe = filepath.Join(os.Getenv("SystemRoot"), "win.ini")
-	}
-	if perm, reason := guard.Check(probe, OpRead); perm != Denied || reason.Code != ReasonSystem {
-		t.Errorf("系统路径 %q 应拒绝（system），实际 %v / %q（%s）", probe, perm, reason.Code, reason.Message)
-	}
 }

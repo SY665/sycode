@@ -1,7 +1,9 @@
 package filesystem
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -160,5 +162,47 @@ func TestParseIgnoreFileStripsTrailingSpaces(t *testing.T) {
 	patterns := parseIgnoreFile([]byte("*.log   \r\n\r\n# c\r\n"), nil)
 	if len(patterns) != 1 {
 		t.Fatalf("应只解析出 1 条规则，实际 %d 条", len(patterns))
+	}
+}
+
+// TestGitAwarenessAcceptsUnresolvedPath 覆盖"根已解析、调用方给的是原始路径"。
+//
+// Guard 传进来之前已经 Resolve 过，但直接调用 IsIgnored 的地方（测试、将来的工具）
+// 不保证如此。macOS 上 /var → /private/var 会把 Rel 推到根之外，忽略规则整体失效——
+// 这个测试用"链接目录 → 真实目录"的映射复现同一形状，Windows 上也能跑。
+func TestGitAwarenessAcceptsUnresolvedPath(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatalf("建目录失败：%v", err)
+	}
+	if err := os.MkdirAll(link, 0o755); err != nil {
+		t.Fatalf("建占位目录失败：%v", err)
+	}
+	if err := os.WriteFile(filepath.Join(real, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
+		t.Fatalf("写 .gitignore 失败：%v", err)
+	}
+
+	old := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		if path == link || strings.HasPrefix(path, link+string(filepath.Separator)) {
+			return real + path[len(link):], nil
+		}
+		return old(path)
+	}
+	defer func() { evalSymlinks = old }()
+
+	git, err := NewGitAwareness(link)
+	if err != nil {
+		t.Fatalf("构造失败：%v", err)
+	}
+
+	// 传未解析的路径：应当仍然命中规则。
+	if !git.IsIgnored(filepath.Join(link, "app.log")) {
+		t.Error("未解析的路径也应命中 *.log——否则 macOS 上整棵树的忽略规则都失效")
+	}
+	if git.IsIgnored(filepath.Join(link, "main.go")) {
+		t.Error("未命中的文件不该被忽略")
 	}
 }

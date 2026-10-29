@@ -52,6 +52,13 @@ func (g *GitAwareness) Root() string { return g.root }
 // 根目录自身与根目录外的路径一律返回 false：前者不该被"忽略"这张网罩住，
 // 后者不归这套规则管（工作目录外的判定由 Guard 的其它规则负责）。
 func (g *GitAwareness) IsIgnored(path string) bool {
+	// 根的形态是"解析后"，所以路径也得是。Guard 传进来的已经是（它先 Resolve），
+	// 直接调用方（测试、将来的工具）不一定。前缀对不上时补一次解析，
+	// 别让调用约定变成隐式要求——那正是 macOS 上忽略规则整体失效的原因。
+	if !isUnder(g.root, path) {
+		path = resolveSymlinks(path)
+	}
+
 	rel, err := filepath.Rel(g.root, path)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false
