@@ -225,13 +225,28 @@ type PermissionRequester interface {   // 由 UI 实现，注入给工具
 }
 ```
 
+`registry.go`：
+
 | 函数 | 签名 | 职责 |
 |---|---|---|
 | `NewRegistry` | `func NewRegistry() *Registry` | 空表 + 顺序切片（导出顺序稳定） |
-| `Register` | `func (r *Registry) Register(t Tool) error` | 重名/空名报错 |
+| `Register` | `func (r *Registry) Register(t Tool) error` | nil / 空名 / 重名一律报错，不覆盖不忽略 |
 | `Get` | `func (r *Registry) Get(name string) (Tool, bool)` | |
-| `All` | `func (r *Registry) All() []Tool` | 按注册顺序 |
-| `Schemas` | `func (r *Registry) Schemas() []Schema` | 给 llm 转换用 |
+| `All` | `func (r *Registry) All() []Tool` | 按注册顺序返回副本 |
+| `Len` | `func (r *Registry) Len() int` | |
+| `Schemas` | `func (r *Registry) Schemas() []Schema` | 按注册顺序导出；`Input` 浅拷贝，防下游改写工具自己的 schema 变量 |
+| `cloneSchema` | 私有 | 浅拷贝一层 properties；不做 JSON 往返（每回合都跑，代价大于收益） |
+
+补充类型（2026-10-29 落地时补齐，均在本包内定义）：
+
+| 元素 | 签名 | 说明 |
+|---|---|---|
+| `Display` | `type Display struct { Kind DisplayKind; Title string; Lines []string }` | 给 UI 的结构化展示；`DisplayDiff`/`DisplayList`。与 `Content` 分开：人要看高亮，模型只要原文 |
+| `PermissionRequest` | `type PermissionRequest struct { Tool, Op, Path, Detail string }` | 字段刻意少——弹窗放不下整个 Input |
+| `Decision` | `DecisionDeny`(零值) / `DecisionAllowOnce` / `DecisionAllowSession` + `Allowed()` | 零值是拒绝：没拿到回答不能默认放行 |
+| `maxInlineBytes` | `const = 32 * 1024` | 回给模型的单条结果上限 |
+| `clip` | `func clip(content string) (string, bool)` | 按字节截断、按 rune 收尾、尽量切在行边界；**落盘由各工具自己做**（超限提示因工具而异） |
+| `lastNewline` | 私有 | 找最后一个换行，供 `clip` 退到行边界 |
 
 ### `read_file.go`（其余工具同构）
 

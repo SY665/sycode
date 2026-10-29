@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 20:35 | 阶段：**P3** | 当前单元：3.1 已完成，下一单元 3.2（`tools.Registry` + schema）
+更新时间：2026-10-29 20:50 | 阶段：**P3** | 当前单元：3.2 已完成，下一单元 3.3（`read_file` / `glob` / `grep`）
 
 ## 已完成（本阶段）
 
@@ -48,22 +48,27 @@
   - `isUnder` 用 `filepath.Rel`（前缀匹配会让 `work2` 混进 `work`）；Windows 折小写比较
   - `evalSymlinks` 是包内变量：Windows 默认建不了真符号链接，测试替换它压穿越（含"父目录是链接、目标不存在"）
   - 新增直接依赖 `go-git/go-git/v5`（选型表已批准，只用 gitignore 解析器）
-- 代码 6,223 行（源码 2,848 / 测试 3,375），21 笔提交；直接依赖 7 个
-- 记录：`output-1_impl-filesystem.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 3.2 已收口（`tool.go` 139 + `registry.go` 94，测试 235）：
+  - 契约：`Tool`(5 方法)/`Validator`/`PermissionRequester`、`Result{Content, Display, Artifact}`、`Schema`（**独立于 llm.ToolSchema**）
+  - `Registry`：nil/空名/重名报错，`All`/`Schemas` 顺序稳定且返回副本
+  - `Decision` 零值 = `DecisionDeny`；`clip` 截到 32KiB、按 rune 收尾、切在行边界（**首个消费方是 3.3 的 read_file**）
+- 代码 6,491 行（源码 3,081 / 测试 3,610），22 笔提交；直接依赖 7 个
+- 记录：`output-1..2_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P3 单元 3.2 —— `internal/tools` 契约与注册表**（`tool.go` + `registry.go`，2 个文件）：
+**P3 单元 3.3 —— `read_file` / `glob` / `grep`**（三个工具文件 + 一个共用 input 解析）：
 
-1. `tool.go`：`Input = map[string]any`；`Result{Content string; Display *Display; Artifact string}`；`Schema{Name, Description string; Input map[string]any}`；`Tool` 接口（`Name`/`Description`/`InputSchema`/`Execute`）；可选 `Validator{ValidateInput}`
-2. `registry.go`：`NewRegistry()`、`Register(t Tool) error`（重名/空名报错）、`Get(name)`、`All()`（**注册顺序稳定**）、`Schemas()`（供 `llm` 转换）
-3. **注意依赖方向**：`tools` 不得 import `llm`（`deps_test` 有硬断言）；`llm.ToolSchema` 与 `tools.Schema` 是两个类型，转换在 appstate
-4. 常量：`Result` 的 32KB 上限（`maxInlineBytes`）——3.3 的 read_file 就会用到
-5. 验收：注册重复名报错、导出顺序与注册顺序一致、`Schemas()` 与 `InputSchema()` 一致
+1. `read_file.go`：`NewReadFileTool(guard *filesystem.Guard) *ReadFileTool`；`ValidateInput` 校验 `path`（必填/字符串）、`offset`/`limit`（正整数）；`Execute` 走 `guard.Check(path, OpRead)` → 读 → `clip` 截断（超限写 artifact 并给路径）→ `Display{Kind: DisplayList}`
+2. `glob.go`：`*.go` 与 `**` 语义（用 `doublestar`？**没有**在选型表里——先用手写分段匹配，或停下来问人）；`include` 过滤；结果按路径排序并限量
+3. `grep.go`：正则 + 文件过滤 + 行号；跳过二进制与 `.gitignore` 忽略项
+4. 共用：`input.go` 里的 `requireString(in, "path")` / `optionalInt(in, "limit", 默认)` —— 报错格式照 CODING-STANDARDS §13：`参数错误：缺少必填字段 "path"。请带上 {"path":"…"} 重试。`
+5. 验收：越界路径被 Guard 拒绝且**副作用为零**；超限结果截断且 `Artifact` 有值；`参数错误` 中文可读
 
-**先想清楚**：`Display` 结构（diff/表格）在 3.4 才会真正用上；本单元只定义最小形态（`Kind string` + 原始行），别一次设计完。
+**开工前要定的一件事**：`**` 递归通配是自己写（按 `/` 切段回溯）还是引 `bmatcuk/doublestar`？
+后者在选型表外，需要问用户；我倾向自己写（约 40 行 + 表驱动测试），因为只用一种模式语法，引依赖不划算。
 
-## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
+## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
 
 - 工具 shell 的 PATH 被裁剪：`go` 不可见 → 先 `source scripts/env.sh`（不是没装）
 - `go build ./...` 会把 main 包二进制写到当前目录 → `scripts/check.sh` 已改成 `-o <临时目录>/`
