@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      # 三平台跑同一份脚本：格式、vet、构建、测试、竞态
+      # Windows runner 自带 mingw gcc，CGO_ENABLED=1 时 -race 可用
+      - name: Run checks
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: bash scripts/check.sh

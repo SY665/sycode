@@ -1,0 +1,5 @@
+# 统一换行符：shell 脚本在 Windows 上必须保持 LF，否则 Git Bash 报 "$'\r': command not found"
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.exe binary
