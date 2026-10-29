@@ -116,7 +116,7 @@ func TestCheckSystemPath(t *testing.T) {
 
 // TestCheckArtifactDir 覆盖第 5 行：工具输出目录可读、不可写不可执行。
 func TestCheckArtifactDir(t *testing.T) {
-	artifact, err := bashOutputDir()
+	artifact, err := BashOutputDir()
 	if err != nil {
 		t.Skipf("取不到工具输出目录：%v", err)
 	}

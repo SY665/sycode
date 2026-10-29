@@ -77,7 +77,7 @@
 | 3.2 | `tools.Registry` + schema 导出 | ✅ nil/空名/重名报错且不改表；`All`/`Schemas` 与注册顺序一致；`Schemas` 返回副本（外部改写不污染工具 schema）；`clip` 按 rune 收尾并切在行边界 |
 | 3.3 | `read_file` / `glob` / `grep` | ✅ 分段读 + 二进制探测 + 16MiB 上限；`**` 自己实现（模式转正则，零层也匹配）；include 过滤、忽略项与 `.git` 跳过、限量与截断提示；三类工具共用一条权限通道 |
 | 3.4 | `write_file` / `edit_file` | ✅ 原子写（同目录临时文件 + Sync + Rename）与回读校验；拒绝时副作用为零；内容未变不碰文件；`edit_file` 唯一匹配、歧义列候选行号、0 命中提示用 grep；diff 进 `Display` |
-| 3.5 | `bash` | 超时、输出落盘、危险命令确认、Windows shell 选择（ADR-006） |
+| 3.5 | `bash` | ✅ 超时（默认 120s / 上限 600s，杀整棵进程树）、超 32KiB 落盘到 `~/.sycode/bash`、危险命令在弹窗标 ⚠、shell 选择按 ADR-006（与系统提示同源）、非 0 退出码当信息而非故障 |
 | 3.6 | `appstate` 工具循环（`agentcore` 装配工具） | 多轮调用、25 轮上限、连续失败提示换策略 |
 | 3.7 | 权限弹窗 | 允许一次 / 本会话总是允许 / 拒绝；拒绝时副作用为零 |
 | 3.8 | `internal/cleanup`：artifact 回收（`~/.sycode/bash/` 等，保留 7 天） | bash 输出落盘后，7 天前的 artifact 在下次启动被清理；有单测覆盖边界（空目录/仅保留期外） |

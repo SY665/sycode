@@ -89,7 +89,7 @@ func NewGuard(workingDir string, git *GitAwareness) *Guard {
 	if home, err := os.UserHomeDir(); err == nil {
 		guard.homeDir = absClean(home)
 	}
-	if dir, err := bashOutputDir(); err == nil {
+	if dir, err := BashOutputDir(); err == nil {
 		guard.artifactDir = absClean(dir)
 	}
 	return guard
@@ -263,10 +263,12 @@ func (g *Guard) sensitiveHomeEntry(resolved string) (string, bool) {
 	return first, true
 }
 
-// bashOutputDir 返回工具输出（如 bash 超长输出）的落盘目录。
+// BashOutputDir 返回工具输出（如 bash 超长输出）的落盘目录。
 //
 // 它同时是"可读不可写"的授权例外：模型能回头读自己的输出，但不能改。
-func bashOutputDir() (string, error) {
+// 导出是必要的：落盘方（tools）必须与 Guard 用同一个路径，否则会出现
+// "写进去了但 Guard 不允许读"的死角。
+func BashOutputDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("无法确定用户目录：%w", err)

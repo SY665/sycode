@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/sy665/sycode/internal/agentcore"
@@ -19,6 +17,7 @@ import (
 	"github.com/sy665/sycode/internal/llm"
 	"github.com/sy665/sycode/internal/logging"
 	"github.com/sy665/sycode/internal/providers"
+	"github.com/sy665/sycode/internal/tools"
 )
 
 // version 与 commit 由构建注入：
@@ -151,23 +150,16 @@ func promptEnv(model string) llm.Env {
 	}
 }
 
-// detectShell 按 ADR-006 的顺序给出 bash 工具会用的解释器名。
+// detectShell 取命令执行工具会用的解释器名，写进系统提示（ADR-006 要求）。
 //
-// P3 的 tools.resolveShell 会接管这段逻辑；在那之前系统提示也得有个值，
-// 否则模型不知道该按哪种语法写命令。顺序与 ADR-006 保持一致，避免两处结论不同。
+// 与真正执行命令用的是同一个来源（tools.ResolveShell）：两处结论一旦分叉，
+// 模型就会按一种语法写命令、而实际在另一种 shell 里跑。
 func detectShell() string {
-	if shell := strings.TrimSpace(os.Getenv("SYCODE_SHELL")); shell != "" {
-		return shell
+	shell, err := tools.ResolveShell()
+	if err != nil {
+		// 拿不到就省略这一行：提示里少一行，比写一个假名字强。
+		slog.Debug("未能确定 shell，系统提示将省略该行", "err", err)
+		return ""
 	}
-	if runtime.GOOS != "windows" {
-		// POSIX 系统上 bash 是 ADR-006 的首选，且几乎必然存在。
-		return "bash"
-	}
-	// Windows 按 bash → powershell → cmd 的顺序找一个能用的。
-	for _, name := range []string{"bash.exe", "powershell.exe", "cmd.exe"} {
-		if _, err := exec.LookPath(name); err == nil {
-			return strings.TrimSuffix(name, ".exe")
-		}
-	}
-	return "cmd"
+	return shell.Name
 }

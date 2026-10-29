@@ -367,9 +367,35 @@ type PermissionRequester interface {   // 由 UI 实现，注入给工具
 **没有引 diff 库，也没有写 LCS**：这里只有"改动前后"一种场景，掐前后缀足够，且它绝不会骗人
 （不会把改过的说成没改）。真需要细粒度对齐时再换，换的成本被 `Display` 挡住了。
 
-### `bash.go` 的额外约定
+### `bash.go`（命令执行）
 
-`resolveShell() (Shell, error)`（ADR-006 的选择顺序）、`isDangerous(cmd string) bool`（模式表）、`truncateOutput(out []byte) (inline string, artifact string)`。
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `ResolveShell` | `func ResolveShell() (Shell, error)` | ADR-006 顺序：`SYCODE_SHELL` → bash → PS → cmd；**导出**是因为 `main` 拼系统提示时要用同一份结论 |
+| `Shell.command` | `func (s Shell) command(ctx context.Context, command string) *exec.Cmd` | bash 用 `-c`；PS 用 `-NoProfile -NonInteractive -Command`（别让用户 profile 改输出编码）；cmd 用 `/c` |
+| `NewBashTool` | `func NewBashTool(guard *filesystem.Guard, perm PermissionRequester) (*BashTool, error)` | 唯一会失败的构造器：机器上没有可用 shell |
+| `Execute` | 校验 → 问 `OpExec` 权限（`Detail` 带命令本身，危险命令加 ⚠ 前缀）→ 执行 → 截断/落盘 | **非 0 退出码不是错误**：构建失败、测试不通过都是信息，写进 `Content` |
+| `run` | `func (t *BashTool) run(ctx, command string, timeout time.Duration) (string, int, bool)` | `WithTimeout` + 独立 goroutine 等 `Wait`；超时杀整棵树 |
+| `exitCodeOf` | 私有 | 从 `*exec.ExitError` 取退出码 |
+| `isDangerous` | `func isDangerous(command string) bool` | 模式表（`rm -r/-f`、`git reset --hard`、管道下载即执行、`mkfs`、`dd`、`sudo`、fork 炸弹）；**只影响提示，不改变权限判定** |
+| `truncateOutput` | `func truncateOutput(output string) (string, string)` | 超 32KiB 落盘到 `filesystem.BashOutputDir()`，返回截断文本与路径 |
+| `oneLine` / `tailString` | 私有 | 弹窗里的单行命令；错误里附的输出尾部（按 rune 收尾） |
+| `limitedBuffer` | 并发安全的限容缓冲 | stdout/stderr 两个 goroutine 同时写；超 4MiB 丢弃并记数（进程可能吐几个 GB） |
+
+**平台相关**（`proc_windows.go` / `proc_unix.go`，build tag 分开）：
+
+| 函数 | Windows | Unix |
+|---|---|---|
+| `prepareCommand` | 空实现 | `SysProcAttr{Setpgid: true}`，让命令自成进程组 |
+| `killTree` | `taskkill /T /F /PID`（只杀 shell 会留下 `go build` 的孤儿子进程） | `kill(-pid, SIGKILL)` 杀整组 |
+
+**两个必须记住的坑**：
+
+1. **`cmd.WaitDelay` 不能省**。子进程继承输出管道且不肯退出时，`Wait` 会一直等管道关闭，
+   超时形同虚设——实测 1 秒超时的命令被拖到命令自己结束（30 秒）。设 `WaitDelay = 3s` 后
+   超时才真正生效（用例从 30s 降到 4s）。
+2. **`truncateOutput` 不自己拼路径**：从 `filesystem.BashOutputDir()` 拿。两处拼接一旦不一致，
+   就会出现"写进去了但 Guard 不允许读"的死角。
 
 ## 5. 模型层 `internal/llm/`
 

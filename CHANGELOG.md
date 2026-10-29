@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `internal/tools/bash.go`（+ `proc_windows.go` / `proc_unix.go`）：命令执行工具。超时杀整棵进程树（`taskkill /T`、`kill(-pid)`）、`WaitDelay` 兜底防超时失效、超 32KiB 输出落盘到 `~/.sycode/bash`、危险命令在权限弹窗标 ⚠；`ResolveShell` 按 ADR-006 选定解释器，`main` 的系统提示改为复用它（消除两处重复）
 - `internal/tools/write_file.go` + `edit_file.go` + `diff.go`：写类工具。**原子写**（同目录临时文件 → Sync → Rename）、写后回读校验、被拒时零副作用、内容未变不碰文件；`edit_file` 只接受唯一匹配（歧义时列出候选行号，0 命中时提示先用 grep）；改动以 `Display{Kind: DisplayDiff}` 呈现
 - `internal/tools/glob.go` + `pattern.go`：`glob` 工具与**自己实现的 glob 匹配**（模式转正则：`*`/`?`/`**`（零层也匹配）/`[abc]`/`[!abc]`，Windows 大小写不敏感）；跳过 `.git` 与被忽略目录，输出字典序（两次调用结果一致）
 - `internal/tools/grep.go`：`grep` 工具（Go 正则、`include` glob 过滤、`路径:行号: 内容`）；跳过二进制、超 4MiB 文件与忽略项；单行上限 256KiB 且超长行不影响后续行号
