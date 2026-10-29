@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 23:05 | 阶段：**P4** | 当前单元：4.1 已完成，下一单元 4.3（`projection.go`）→ 再做 4.2 接线
+更新时间：2026-10-29 23:30 | 阶段：**P4** | 当前单元：4.1 与 4.3 已完成，下一单元 4.2（恢复接线）
 
 ## 已完成（本阶段）
 
@@ -113,23 +113,18 @@
   - `SessionStarted` 只存 `work_dir`；版本/模型属于"这次运行"而非"这段对话"
   - **规模超限，如实记**：源码 540 行 > 300 行上限。`store.go` 里挤了 4 个入口 + 3 个辅助；
     若复核认为必须拆，按「写入路径（Create/Append/ensureTrailingNewline）」与「读取路径（Load/List/readEvents/summarize）」拆两笔最自然
-- 代码 12,841 行（源码 6,513 / 测试 6,328），33 笔提交；直接依赖 7 个
-- 记录：`output-1_impl-session-store.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 4.3 已收口（`session/projection.go` 68 + 测试 107）：
+  - `BuildTurns(events) []Turn`——**没有 error**（原设计有）：坏载荷跳过，与 `readEvents` 口径一致；
+    返回一个永远 nil 的错误只是给调用方留一条走不到的分支
+  - `user_message` 开一轮，其后 `assistant_turn` 填入；同一轮多段正文用空行连接（工具循环会产生多条，覆盖就丢内容）
+  - 无 user 打头的回答单独成轮、`User` 留空：那是异常中断留下的，仍是模型说过的话
+  - `session_started`/未知类型跳过 → 老版本写的会话能被新版本读出来
+- 代码 13,016 行（源码 6,581 / 测试 6,435），34 笔提交；直接依赖 7 个
+- 记录：`output-1..2_impl-*.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**先做 4.3 再做 4.2**（ROADMAP 的编号不变，只是顺序换了）：恢复需要"事件 → 消息"的投影，
-而 4.2 是接线。先接线等于把投影临时写在 adaptor 里，回头还要搬一次。
-
-**P4 单元 4.3 —— `session/projection.go`**
-
-1. `type Turn struct { User, Assistant string; Tools []ToolRecord }`
-2. `func BuildTurns(evs []Event) ([]Turn, error)`：`user_message` 开一个新 Turn，
-   紧随其后的 `assistant_turn` 填进同一个 Turn；没有 user 打头的 assistant_turn 单独成 Turn（`User` 为空）；
-   `session_started` 与 `compaction_applied` 跳过。**不丢正文**：多轮 assistant_turn 用 `\n\n` 连起来
-3. 验收：`user/assistant/user/assistant` 配对正确；孤立 assistant 不 panic；空事件列表返回空
-
-**P4 单元 4.2 —— 恢复接线**（`appstate` + `repl` + `cmd`）
+**P4 单元 4.2 —— 恢复接线**（`appstate` + `repl` + `cmd`；别一次扩到 `/sessions` 或 `/context`）
 
 1. `appstate.Restore(turns []session.Turn)`：把 Turn 转成 `llm.Message` 交替序列，写进历史
 2. **关键限制，先想清楚**：恢复的历史**只有正文，没有 tool 消息**。工具摘要不进上下文，
@@ -144,6 +139,9 @@
 
 **不要顺手做**：`/sessions` 选择器（4.5）、`/context`（4.4）。会话文件目前靠 `Store.List()` 全扫，
 几十个会话无感，先别引索引。
+
+**注意规模**：这一单元四处都要动，容易超 300 行。真超了就按「写库（4）+ 恢复（1、2）」与
+「UI 与 flag（3）」拆两笔：前者可独立验证（跑完直接看文件），后者依赖前者。
 
 ## 已知坑 / 需要绕过的东西
 

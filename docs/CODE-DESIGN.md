@@ -522,7 +522,7 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 | | `Decode` | `func (e Event) Decode(v any) error` |
 | `path.go` | `namespaceDirName` | `func namespaceDirName(workingDir string) string`（目录名 sanitize 到 32 字符 + sha1 前 10 位） |
 | | `normalizeWorkDir` | `func normalizeWorkDir(dir string) string`（绝对化 + Clean；Windows 折小写） |
-| `projection.go` | `BuildTurns` | `func BuildTurns(evs []Event) ([]Turn, error)`（4.3 再写） |
+| `projection.go` | `BuildTurns` | `func BuildTurns(events []Event) []Turn`（`user_message` 开轮、其后 `assistant_turn` 填入；孤立回答单独成轮） |
 
 **关键约束**：`session` 不 import `llm`（`cli/cmd/deps_test.go` 会拦）。投影结果是中立的
 `Turn{User, Assistant string; Tools []ToolRecord}`，由 `appstate` 转成 `llm.Message`。
@@ -533,6 +533,8 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 - **不写 `index.json`**：`List` 靠扫目录 + 读会话文件得出摘要。两处维护索引必然不一致，而会话文件本来就不大
 - `Session` **不持有文件句柄**：每次 `Append` 打开-写入-关闭。追加频率是"一条输入一次"，开销可忽略，换来不必管句柄生命周期
 - `SessionStarted` 只存 `work_dir`：版本与模型属于"这次运行"而不是"这段对话"，写进去会让恢复出的旧会话看起来用错了模型
+- `BuildTurns` **没有 error 返回值**（原设计有）：坏载荷按"跳过这条事件"处理，与 `readEvents` 的容错口径一致。
+  返回一个永远为 nil 的错误等于给调用方留一条不可能走的分支；真要严格，`readEvents` 那一层就该拦住
 
 ## 7. 回合层 `internal/appstate/`
 
