@@ -2,51 +2,34 @@ package agentcore
 
 import (
 	"context"
-	"errors"
-	"sync"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/sy665/sycode/internal/filesystem"
 	"github.com/sy665/sycode/internal/llm"
+	"github.com/sy665/sycode/internal/tools"
 )
 
-// fakeClient 记录收到的请求，并按 reply 产出事件流。
+// fakeClient 按需返回一段流。
 type fakeClient struct {
-	mu       sync.Mutex
-	requests []llm.Request
+	requests int
 	reply    func(ctx context.Context) (<-chan llm.StreamEvent, error)
 }
 
-func (f *fakeClient) StreamChat(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, error) {
-	f.mu.Lock()
-	f.requests = append(f.requests, req)
-	f.mu.Unlock()
+func (f *fakeClient) StreamChat(ctx context.Context, _ llm.Request) (<-chan llm.StreamEvent, error) {
+	f.requests++
 	return f.reply(ctx)
 }
 
-func (f *fakeClient) lastRequest(t *testing.T) llm.Request {
+// newCore 造一个不挂工具、不挂权限通道的引擎。
+func newCore(t *testing.T, client llm.Client, system string) AgentCore {
 	t.Helper()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.requests) == 0 {
-		t.Fatal("没有收到任何请求")
-	}
-	return f.requests[len(f.requests)-1]
+	guard := filesystem.NewGuard(t.TempDir(), nil)
+	return New(client, tools.NewRegistry(), guard, nil, system)
 }
 
-// scripted 返回一个"先发 events，再关闭"的事件流。
-func scripted(events ...llm.StreamEvent) func(context.Context) (<-chan llm.StreamEvent, error) {
-	return func(context.Context) (<-chan llm.StreamEvent, error) {
-		ch := make(chan llm.StreamEvent, len(events))
-		for _, ev := range events {
-			ch <- ev
-		}
-		close(ch)
-		return ch, nil
-	}
-}
-
-// drain 读完事件流（3 秒超时，避免实现回归导致测试挂死）。
+// drain 读完事件流。
 func drain(t *testing.T, ch <-chan llm.StreamEvent) []llm.StreamEvent {
 	t.Helper()
 	var events []llm.StreamEvent
@@ -64,62 +47,20 @@ func drain(t *testing.T, ch <-chan llm.StreamEvent) []llm.StreamEvent {
 	}
 }
 
-func TestSubmitBuildsRequestWithHistory(t *testing.T) {
-	client := &fakeClient{reply: scripted(textEvent("我在"))}
-	core := NewDirect(client, "你是 SyCode。")
-
-	ch, err := core.Submit(context.Background(), "你是谁")
-	if err != nil {
-		t.Fatalf("提交失败：%v", err)
-	}
-	drain(t, ch)
-
-	first := client.lastRequest(t)
-	if first.System != "你是 SyCode。" {
-		t.Errorf("系统提示未注入：%q", first.System)
-	}
-	if len(first.Messages) != 1 || first.Messages[0].Role != llm.RoleUser || first.Messages[0].Content != "你是谁" {
-		t.Fatalf("首轮请求应只含本轮输入：%+v", first.Messages)
-	}
-
-	// 第二轮必须带上"用户 + 上一条回答 + 新输入"，否则模型会失忆。
-	if _, err := core.Submit(context.Background(), "接着说"); err != nil {
-		t.Fatalf("第二轮提交失败：%v", err)
-	}
-	second := client.lastRequest(t)
-	if len(second.Messages) != 3 {
-		t.Fatalf("第二轮应带 3 条消息，实际 %d：%+v", len(second.Messages), second.Messages)
-	}
-	if second.Messages[1].Role != llm.RoleAssistant || second.Messages[1].Content != "我在" {
-		t.Errorf("历史里应包含上一轮回答：%+v", second.Messages[1])
-	}
-	if second.Messages[2].Content != "接着说" {
-		t.Errorf("最后一条应是本轮输入：%+v", second.Messages[2])
+// simpleReply 是一轮"吐一个字就结束"的流。
+func simpleReply() func(context.Context) (<-chan llm.StreamEvent, error) {
+	return func(context.Context) (<-chan llm.StreamEvent, error) {
+		ch := make(chan llm.StreamEvent, 2)
+		ch <- llm.StreamEvent{Type: llm.EventText, Text: "答"}
+		ch <- llm.StreamEvent{Type: llm.EventDone}
+		close(ch)
+		return ch, nil
 	}
 }
 
-func TestSubmitRecordsNothingWhenStreamFails(t *testing.T) {
-	client := &fakeClient{reply: func(context.Context) (<-chan llm.StreamEvent, error) {
-		return nil, errors.New("模型名为空")
-	}}
-	core := NewDirect(client, "")
-
-	if _, err := core.Submit(context.Background(), "你好"); err == nil {
-		t.Fatal("构造失败应返回错误")
-	}
-	// 请求都没发出去，历史里不该留下一条没人回答的提问。
-	if got := core.Messages(); len(got) != 0 {
-		t.Errorf("历史应为空，实际 %+v", got)
-	}
-}
-
-func TestSubmitForwardsEventsUnchanged(t *testing.T) {
-	client := &fakeClient{reply: scripted(
-		textEvent("答"),
-		llm.StreamEvent{Type: llm.EventUsage, Usage: &llm.Usage{TotalTokens: 9}},
-		llm.StreamEvent{Type: llm.EventDone},
-	)}
-	core := NewDirect(client, "")
+func TestSubmitForwardsToAppstate(t *testing.T) {
+	client := &fakeClient{reply: simpleReply()}
+	core := newCore(t, client, "你是 SyCode。")
 
 	ch, err := core.Submit(context.Background(), "问")
 	if err != nil {
@@ -127,58 +68,51 @@ func TestSubmitForwardsEventsUnchanged(t *testing.T) {
 	}
 	events := drain(t, ch)
 
-	if len(events) != 3 {
-		t.Fatalf("应原样转发 3 个事件，实际 %d", len(events))
+	if len(events) != 2 || events[1].Type != llm.EventDone {
+		t.Fatalf("事件不符：%+v", events)
 	}
-	if events[0].Type != llm.EventText || events[0].Text != "答" {
-		t.Errorf("正文事件被改动：%+v", events[0])
+	if client.requests != 1 {
+		t.Errorf("应请求 1 次，实际 %d", client.requests)
 	}
-	if events[1].Usage == nil || events[1].Usage.TotalTokens != 9 {
-		t.Errorf("用量事件被改动：%+v", events[1])
-	}
-	if !events[2].IsTerminal() {
-		t.Errorf("终态事件被改动：%+v", events[2])
+	// 历史由 appstate 管：界面通过 Messages 读。
+	msgs := core.Messages()
+	if len(msgs) != 2 || msgs[0].Content != "问" || msgs[1].Content != "答" {
+		t.Errorf("历史不符：%+v", msgs)
 	}
 }
 
-func TestEmptyAnswerIsNotRecorded(t *testing.T) {
-	// 只有 done、没有正文：历史里不该出现空 assistant 消息（有些接口会拒绝这种消息）。
-	client := &fakeClient{reply: scripted(llm.StreamEvent{Type: llm.EventDone})}
-	core := NewDirect(client, "")
+func TestClearDelegated(t *testing.T) {
+	core := newCore(t, &fakeClient{reply: simpleReply()}, "")
 
-	ch, err := core.Submit(context.Background(), "问")
-	if err != nil {
-		t.Fatalf("提交失败：%v", err)
-	}
+	ch, _ := core.Submit(context.Background(), "问")
 	drain(t, ch)
 
-	if got := core.Messages(); len(got) != 1 || got[0].Role != llm.RoleUser {
-		t.Errorf("空回答不应入历史，实际 %+v", got)
+	core.Clear()
+	if len(core.Messages()) != 0 {
+		t.Error("Clear 应清空历史")
 	}
 }
 
-func TestInterruptKeepsPartialAnswer(t *testing.T) {
-	// 产出半个回答后卡住，模拟用户按 Esc。
+func TestInterruptDelegated(t *testing.T) {
 	client := &fakeClient{reply: func(ctx context.Context) (<-chan llm.StreamEvent, error) {
 		ch := make(chan llm.StreamEvent)
 		go func() {
 			defer close(ch)
-			ch <- textEvent("这段会保留")
+			ch <- llm.StreamEvent{Type: llm.EventText, Text: "开始"}
 			<-ctx.Done()
 		}()
 		return ch, nil
 	}}
-	core := NewDirect(client, "")
+	core := newCore(t, client, "")
 
-	ch, err := core.Submit(context.Background(), "写点东西")
+	ch, err := core.Submit(context.Background(), "写长文")
 	if err != nil {
 		t.Fatalf("提交失败：%v", err)
 	}
-
-	// 先收到第一个增量，再中断。
-	if ev, ok := <-ch; !ok || ev.Text != "这段会保留" {
+	if ev := <-ch; ev.Text != "开始" {
 		t.Fatalf("首个事件不符：%+v", ev)
 	}
+
 	core.Interrupt()
 
 	deadline := time.After(3 * time.Second)
@@ -186,14 +120,6 @@ func TestInterruptKeepsPartialAnswer(t *testing.T) {
 		select {
 		case _, ok := <-ch:
 			if !ok {
-				// PRD F-LLM-6：已经看到的内容不该因为中断而丢失。
-				msgs := core.Messages()
-				if len(msgs) != 2 {
-					t.Fatalf("历史应含用户与半截回答，实际 %+v", msgs)
-				}
-				if msgs[1].Role != llm.RoleAssistant || msgs[1].Content != "这段会保留" {
-					t.Errorf("半截回答未入历史：%+v", msgs[1])
-				}
 				return
 			}
 		case <-deadline:
@@ -202,119 +128,34 @@ func TestInterruptKeepsPartialAnswer(t *testing.T) {
 	}
 }
 
-func TestInterruptWithoutTurnIsNoop(t *testing.T) {
-	// 没提交过就按 Esc：不能 panic。
-	NewDirect(&fakeClient{}, "").Interrupt()
-}
+func TestNewWiresSystemPrompt(t *testing.T) {
+	// 系统提示必须真的传到了 appstate：它靠 New 的参数串起来，漏了没人会发现。
+	recorder := &capturingClient{system: make(chan string, 1)}
+	guard := filesystem.NewGuard(t.TempDir(), nil)
+	core := New(recorder, tools.NewRegistry(), guard, nil, "你是 SyCode。")
 
-func TestClearResetsHistory(t *testing.T) {
-	client := &fakeClient{reply: scripted(textEvent("答"))}
-	core := NewDirect(client, "")
-
-	ch, _ := core.Submit(context.Background(), "问")
+	ch, _ := core.Submit(context.Background(), "hi")
 	drain(t, ch)
-	if len(core.Messages()) != 2 {
-		t.Fatalf("前置条件不成立：%+v", core.Messages())
-	}
-
-	core.Clear()
-	if got := core.Messages(); len(got) != 0 {
-		t.Errorf("清空后应为空，实际 %+v", got)
-	}
-
-	// 清空后下一轮请求不应带旧历史。
-	ch, _ = core.Submit(context.Background(), "新话题")
-	drain(t, ch)
-	if req := client.lastRequest(t); len(req.Messages) != 1 {
-		t.Errorf("清空后请求应只含新输入，实际 %+v", req.Messages)
-	}
-}
-
-func TestMessagesReturnsCopy(t *testing.T) {
-	client := &fakeClient{reply: scripted(textEvent("答"))}
-	core := NewDirect(client, "")
-
-	ch, _ := core.Submit(context.Background(), "问")
-	drain(t, ch)
-
-	got := core.Messages()
-	got[0].Content = "被外部改了"
-	got = append(got, llm.Message{Role: llm.RoleUser, Content: "外部追加"})
-
-	after := core.Messages()
-	if len(after) != 2 {
-		t.Errorf("外部 append 不该影响内部历史，实际 %d 条", len(after))
-	}
-	if after[0].Content != "问" {
-		t.Errorf("外部改写污染了内部历史：%q", after[0].Content)
-	}
-}
-
-func TestAnswerTextIsConcatenated(t *testing.T) {
-	// 正文是分片到达的，历史里必须拼成一条完整回答，而不是一条一个字的碎片。
-	client := &fakeClient{reply: scripted(textEvent("你"), textEvent("好"), llm.StreamEvent{Type: llm.EventDone})}
-	core := NewDirect(client, "")
-
-	ch, _ := core.Submit(context.Background(), "打招呼")
-	drain(t, ch)
-
-	msgs := core.Messages()
-	if len(msgs) != 2 {
-		t.Fatalf("应只有用户与回答两条消息，实际 %+v", msgs)
-	}
-	if msgs[1].Content != "你好" {
-		t.Errorf("分片应拼成完整回答，实际 %q", msgs[1].Content)
-	}
-}
-
-// textEvent 造一个正文增量事件。
-func textEvent(text string) llm.StreamEvent {
-	return llm.StreamEvent{Type: llm.EventText, Text: text}
-}
-
-func TestSubmitPropagatesParentCancel(t *testing.T) {
-	// 界面取消（Esc 或退出界面）必须真的传到 client：否则底层还在读流，白花钱。
-	ctx, cancel := context.WithCancel(context.Background())
-	innerCtx := make(chan context.Context, 1)
-
-	client := &fakeClient{reply: func(c context.Context) (<-chan llm.StreamEvent, error) {
-		innerCtx <- c
-		ch := make(chan llm.StreamEvent)
-		go func() {
-			<-c.Done()
-			close(ch)
-		}()
-		return ch, nil
-	}}
-	core := NewDirect(client, "")
-
-	ch, err := core.Submit(ctx, "问")
-	if err != nil {
-		t.Fatalf("提交失败：%v", err)
-	}
-	cancel()
 
 	select {
-	case c := <-innerCtx:
-		select {
-		case <-c.Done():
-		case <-time.After(3 * time.Second):
-			t.Fatal("父 context 取消后，传给 client 的 context 没有跟着取消")
+	case got := <-recorder.system:
+		if !strings.Contains(got, "SyCode") {
+			t.Errorf("系统提示内容不符：%q", got)
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("client 没有被调用")
+	default:
+		t.Fatal("请求里没有系统提示")
 	}
+}
 
-	// 事件流也要随之关闭，否则界面会一直等下去。
-	deadline := time.After(3 * time.Second)
-	for {
-		select {
-		case _, ok := <-ch:
-			if !ok {
-				return
-			}
-		case <-deadline:
-			t.Fatal("取消后事件流没有关闭")
-		}
-	}
+// capturingClient 记录请求里的系统提示。
+type capturingClient struct {
+	system chan string
+}
+
+func (c *capturingClient) StreamChat(_ context.Context, req llm.Request) (<-chan llm.StreamEvent, error) {
+	c.system <- req.System
+	ch := make(chan llm.StreamEvent, 1)
+	ch <- llm.StreamEvent{Type: llm.EventDone}
+	close(ch)
+	return ch, nil
 }

@@ -10,10 +10,15 @@ const (
 	EventReasoning EventType = "reasoning" // 思考过程增量（支持 thinking 的模型）
 	EventToolStart EventType = "tool_start"
 	EventToolEnd   EventType = "tool_end"
-	EventUsage     EventType = "usage"
-	EventRetry     EventType = "retry"
-	EventDone      EventType = "done"  // 终态：正常结束
-	EventError     EventType = "error" // 终态：失败
+	// EventToolResult 由 appstate 发出（provider 不会发）：工具执行结束。
+	// Text 是给人看的一句话摘要，Err 是失败原因；Tool 指向那次调用。
+	// 与上面两个分开是因为它们说的不是同一件事：tool_start/end 描述"模型要调什么"，
+	// tool_result 描述"我们执行后得到了什么"。
+	EventToolResult EventType = "tool_result"
+	EventUsage      EventType = "usage"
+	EventRetry      EventType = "retry"
+	EventDone       EventType = "done"  // 终态：正常结束
+	EventError      EventType = "error" // 终态：失败
 )
 
 // Usage 是一次请求的 token 用量。部分供应商在流末尾才给，也可能完全不给。

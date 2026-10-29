@@ -122,14 +122,15 @@ type Request struct {
 type EventType string
 
 const (
-    EventText      EventType = "text"       // 正文增量
-    EventReasoning EventType = "reasoning"  // 思考增量
-    EventToolStart EventType = "tool_start"
-    EventToolEnd   EventType = "tool_end"
-    EventUsage     EventType = "usage"
-    EventRetry     EventType = "retry"
-    EventDone      EventType = "done"
-    EventError     EventType = "error"
+    EventText       EventType = "text"        // 正文增量
+    EventReasoning  EventType = "reasoning"   // 思考增量
+    EventToolStart  EventType = "tool_start"  // provider：模型开始给出调用
+    EventToolEnd    EventType = "tool_end"    // provider：参数收齐，可以执行了
+    EventToolResult EventType = "tool_result" // appstate：执行结束（Text=摘要，Err=失败原因）
+    EventUsage      EventType = "usage"
+    EventRetry      EventType = "retry"
+    EventDone       EventType = "done"
+    EventError      EventType = "error"
 )
 
 type StreamEvent struct {

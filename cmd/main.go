@@ -14,6 +14,7 @@ import (
 	"github.com/sy665/sycode/internal/agentcore"
 	"github.com/sy665/sycode/internal/cli/cmd"
 	"github.com/sy665/sycode/internal/config"
+	"github.com/sy665/sycode/internal/filesystem"
 	"github.com/sy665/sycode/internal/llm"
 	"github.com/sy665/sycode/internal/logging"
 	"github.com/sy665/sycode/internal/providers"
@@ -125,21 +126,66 @@ func buildEnv() (cmd.Env, error) {
 		"base_url", resolved.BaseURL,
 	)
 
+	workDir, err := os.Getwd()
+	if err != nil {
+		slog.Debug("取工作目录失败，工具将无法判断工作目录范围", "err", err)
+		workDir = ""
+	}
+	// .gitignore 读不到不算致命：Guard 还有系统路径、家目录、版本库目录三层规则兜着。
+	git, gitErr := filesystem.NewGitAwareness(workDir)
+	if gitErr != nil {
+		slog.Debug("载入 .gitignore 失败，忽略规则将不生效", "err", gitErr)
+	}
+	guard := filesystem.NewGuard(workDir, git)
+
+	writeRegistry, err := buildTools(guard)
+	if err != nil {
+		return cmd.Env{}, err
+	}
+
+	// perm 传 nil：P3 还没有权限弹窗，写与执行类操作会被拒绝并说明原因（只读模式）。
+	// 这是安全的默认值——没有界面点头，就不该改用户的东西。
 	return cmd.Env{
 		Model: resolved.ModelID,
-		Core:  agentcore.NewDirect(client, llm.Build(promptEnv(resolved.ModelID))),
+		Core: agentcore.New(client, writeRegistry, guard, nil,
+			llm.Build(promptEnv(resolved.ModelID, workDir))),
 	}, nil
 }
 
-// promptEnv 收集系统提示要用的环境事实。
-//
-// 工作目录取不到时留空：提示里少一行环境，比整个程序起不来强。
-func promptEnv(model string) llm.Env {
-	workDir, err := os.Getwd()
+// buildTools 注册全部工具。顺序固定：模型看到 schema 的顺序会影响它的选择倾向。
+func buildTools(guard *filesystem.Guard) (*tools.Registry, error) {
+	registry := tools.NewRegistry()
+
+	// bash 可能装不上（机器上没有可用 shell）。那种情况下其余工具照常可用，
+	// 不该因为一条命令跑不了就让整个程序起不来。
+	bash, err := tools.NewBashTool(guard, nil)
 	if err != nil {
-		slog.Debug("取工作目录失败，系统提示将不含工作目录", "err", err)
-		workDir = ""
+		slog.Warn("bash 工具不可用，其余工具不受影响", "err", err)
 	}
+
+	available := []tools.Tool{
+		tools.NewReadFileTool(guard, nil),
+		tools.NewGlobTool(guard, nil),
+		tools.NewGrepTool(guard, nil),
+		tools.NewWriteFileTool(guard, nil),
+		tools.NewEditFileTool(guard, nil),
+	}
+	if bash != nil {
+		available = append(available, bash)
+	}
+
+	for _, tool := range available {
+		if err := registry.Register(tool); err != nil {
+			// 注册失败只可能是内部 bug（重名/空名），直接终止比带着残缺工具表跑更安全。
+			return nil, fmt.Errorf("装配工具失败：%w", err)
+		}
+	}
+	slog.Debug("工具已注册", "count", registry.Len())
+	return registry, nil
+}
+
+// promptEnv 收集系统提示要用的环境事实。workDir 由调用方给（取不到时为空串）。
+func promptEnv(model, workDir string) llm.Env {
 	return llm.Env{
 		OS:      runtime.GOOS,
 		Arch:    runtime.GOARCH,
