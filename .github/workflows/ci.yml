@@ -24,8 +24,33 @@ jobs:
 
       # 三平台跑同一份脚本：格式、vet、构建、测试、竞态
       # Windows runner 自带 mingw gcc，CGO_ENABLED=1 时 -race 可用
+      #
+      # 失败时把摘要写进 job summary：Actions 的完整日志要登录才能下载，
+      # 而 summary 是公开可读的——没有这一步，"CI 红了"就只剩一句结论。
       - name: Run checks
         shell: bash
         env:
-          CGO_ENABLED: '1'
-        run: bash scripts/check.sh
+          CGO_ENABLED: "1"
+        run: |
+          set +e
+          bash scripts/check.sh 2>&1 | tee check.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "### check.sh 失败（${{ matrix.os }}）"
+              echo
+              echo '```'
+              grep -E "^(==> |--- FAIL|FAIL|# [a-z]|\s+\S+_test\.go:[0-9]+:)" check.log | tail -60
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+      # 失败时把完整日志留成产物，方便本地对照（summary 只放摘要，日志才放证据）
+      - name: Upload check log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-log-${{ matrix.os }}
+          path: check.log
+          if-no-files-found: ignore
