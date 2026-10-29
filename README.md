@@ -2,7 +2,7 @@
 
 终端里的 AI 编程代理。用 Go 写，单二进制，模型通过 OpenAI 兼容协议接入。
 
-> **当前状态：P0 规划阶段**。仓库里只有文档，没有可运行代码。实现从 [ROADMAP.md](./docs/ROADMAP.md) 的 P1 开始。
+> **当前状态：P0 已完成**。工程骨架（`go.mod` / 质量门 / CI / LICENSE）就绪，`cmd/main.go` 是可编译的空壳；功能实现从 [ROADMAP.md](./docs/ROADMAP.md) 的 P1 开始。
 
 ## 它是什么
 
@@ -51,4 +51,4 @@ REPL 内：`/help` `/model` `/context` `/clear` `/sessions` `/exit`
 
 ## 许可
 
-见 [LICENSE](./LICENSE)（待定）。
+MIT，见 [LICENSE](./LICENSE)。

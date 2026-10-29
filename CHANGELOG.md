@@ -10,9 +10,14 @@
 - `docs/CODING-STANDARDS.md` §12 注释分级、§13 中文错误文案（分层语言规则、四要素、前缀表、汉化落点）
 - `docs/WORKFLOW.md` §4.1 推进单元与上下文预算；`.ai-interactions/STATE.md` 断点文件
 - `scripts/env.sh`：为精简 PATH 的终端补齐 Go 工具链环境
+- **工程骨架**：`go.mod`（`github.com/sy665/sycode`, go 1.24）、`cmd/main.go`（`main`/`run` 分离）、`scripts/check.sh` 统一质量门、`Makefile` 薄封装、三平台 CI、MIT `LICENSE`、`.gitattributes`
+
+### Fixed
+- `scripts/check.sh` 的 `go build ./...` 会把 main 包二进制写到仓库根目录（曾误提交 `cmd.exe`），改为输出到临时目录
 
 ### Changed
 - 目录结构对齐常见实现：`agentcore` + `appstate` 取代自建 `agent`；`llm/openai/` 收平为 `llm/openai.go`；`cli/repl` 子包补齐至 10 个
+- 版本号用 `var` 而非 `const`：`-X` 只改写字符串变量，对 `const` 静默失效
 
 ### Removed
 - `internal/arch` 包（依赖方向断言移入 `internal/cli/cmd/deps_test.go`）

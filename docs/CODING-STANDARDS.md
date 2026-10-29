@@ -16,15 +16,17 @@
 | 依赖 | 直接依赖 ≤ 15 个；新增必须在该 PR 描述里写"标准库/现有依赖为何不行" |
 | 生成物 | 如需 `go generate`，生成命令写进 `Makefile`，产物入库并在 PR 说明 |
 
-`Makefile` 目标（约定，P1 落地）：
+质量门是**一份脚本** `scripts/check.sh`，本地与 CI 共用（避免"本地过、CI 不过"）：
 
-```make
-fmt:    # gofmt -l -w .
-vet:    # go vet ./...
-test:   # go test ./...
-race:   # go test -race ./...
-check:  # fmt vet test race  —— PR 前必须全绿
+```bash
+bash scripts/check.sh     # 格式检查 → go vet → go build → go test → go test -race
 ```
+
+有 make 的环境可用 `make check`，它只是薄封装。Windows 默认没有 make，所以以脚本为准。
+
+脚本里的两个必要处理（都不是可选项）：
+- `go build` 必须带 `-o <临时目录>/`：直接 `go build ./...` 会把 main 包的二进制写到仓库根目录，造成误提交。
+- `-race` 需要 cgo + gcc；缺失时**跳过并提示**，不伪装成功。
 
 ## 2. 包与依赖方向
 
@@ -289,7 +291,7 @@ t.Fatalf("权限判定不符：期望 %v，实际 %v（路径 %q）", want, got,
 
 ## 14. 自查清单（提交前 60 秒）
 
-- [ ] `make check` 绿
+- [ ] `bash scripts/check.sh` 绿
 - [ ] 没有新增 `util`/`common` 包
 - [ ] 所有文件 IO 走了 `Guard`
 - [ ] **所有面向用户的错误都是中文**，且带"下一步做什么"

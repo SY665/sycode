@@ -20,7 +20,7 @@ SyCode 是 Go 编写的终端 AI 编程代理。你（AI 编码代理）在此�
 - 工具 `Execute` 不 panic；错误信息要能让模型自我修正。
 - 新增工具 = 1 个文件 + `registry.go` 一行注册；不改 `llm`，不改 REPL 渲染。
 - 单 PR 只解决一个 issue，diff ≤ 600 行（不含测试）。
-- 提交前 `make check`（fmt / vet / test / race）。
+- 提交前 `bash scripts/check.sh`（fmt / vet / build / test / race；有 make 时 `make check`）。
 
 ## 推进方式
 

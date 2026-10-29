@@ -16,8 +16,8 @@
 | 0.2 | 文档评审 | ⬜ 每份文档首行标注 `APPROVED` 或列出修改意见 |
 | 0.3 | Go 工具链 | ✅ go1.26.3 windows/amd64（`D:\Apps\Go`）。验证：空模块 `go build` + `go test` 通过；`charm.land/bubbletea/v2@v2.0.2` 可拉取并编译 |
 | 0.3.1 | 环境固化 | ✅ `go env -w` 持久化 `GOPATH=D:/Golang/code`、`GOPROXY=https://goproxy.cn,direct`、`GOCACHE=...`；`scripts/env.sh` 保留补 PATH 能力。同时清理家目录空 `.git`（曾导致 `error obtaining VCS status`，见风险登记） |
-| 0.4 | 仓库初始化 | ⬜ `go.mod`、`.gitignore`（已有）、`Makefile`、`LICENSE`、CI 骨架 |
-| 0.5 | 空跑验证 | ⬜ `make check` 通过（此时只有依赖方向测试与空包） |
+| 0.4 | 仓库初始化 | ✅ `go.mod`（`github.com/sy665/sycode`, go 1.24）、`Makefile`、`scripts/check.sh`、`.github/workflows/ci.yml`（三平台）、`LICENSE`（MIT）、`.gitattributes` |
+| 0.5 | 空跑验证 | ✅ `bash scripts/check.sh` 全绿（gofmt / vet / build / test / race）；`-X main.version=0.1.0` 注入生效 |
 
 > 环境注意：`go` 已写入系统与用户 PATH，但部分终端（含 IDE 内置 shell）继承的是裁剪过的 PATH，直接调用可能报 command not found。统一用 `source scripts/env.sh` 进入开发会话。
 

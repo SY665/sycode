@@ -222,5 +222,6 @@ docs(arch): record ADR-006 shell selection order
 
 - ✅ P0：PRD / ARCHITECTURE / ROADMAP / WORKFLOW / CODING-STANDARDS 初稿
 - ✅ P0.3：Go 工具链就绪（go1.26.3，`D:\Apps\Go`）；`scripts/env.sh` 固化 PATH / GOCACHE / GOPROXY
-- ⬜ P0 待办：评审上述文档并在首行标注 `APPROVED`；初始化 `go.mod`、`Makefile`、CI
+- ✅ P0.4/P0.5：`go.mod`、`scripts/check.sh`、CI、LICENSE(MIT) 就位，质量门全绿
+- ⬜ P0 待办：评审上述文档并在首行标注 `APPROVED`
 - ⬜ 下一轮讨论：上下文管理、子代理两个专题（各自出 PRD + RFC 后再定 P6 范围）

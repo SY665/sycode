@@ -49,7 +49,7 @@ SYCODE_LOG_LEVEL=debug go run ./cmd
 2. 让 agent 先出 plan，存到 `.ai-interactions/tasks/<issue-slug>/output-1_plan.md`。
 3. 你评审 plan，结论写到下一个 prompt 文件首行（`APPROVED` / `CHANGES REQUESTED`）。
 4. agent 实现；每轮往返都存 prompt 与 output。
-5. `make check` 全绿后开 PR，PR 描述必须包含：改了什么 / 为什么 / 怎么验证 / 留痕路径。
+5. `bash scripts/check.sh` 全绿后开 PR，PR 描述必须包含：改了什么 / 为什么 / 怎么验证 / 留痕路径。
 
 ## 留痕命名
 

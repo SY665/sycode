@@ -73,7 +73,7 @@ run() int
 
 | 元素 | 签名 | 职责 |
 |---|---|---|
-| `version` | `const version = "0.0.0"` | 构建时 `-X main.version=` 覆盖 |
+| `version` | `var version = "dev"` | 构建时 `-X main.version=` 覆盖。**必须是 var**：`-X` 只改写字符串变量，对 const 静默失效（实测仍输出默认值），构建看似成功但版本号是错的 |
 | `main` | `func main()` | 仅 `os.Exit(run())` |
 | `run` | `func run() int` | 按 §1 顺序组装；把错误分流到 stderr 与退出码 |
 
