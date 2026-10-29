@@ -5,6 +5,8 @@
 ## [Unreleased]
 
 ### Added
+- `internal/cleanup`（P3.8）：启动时回收 7 天前的工具输出（`~/.sycode/bash/`）。只删平铺的普通文件——不递归、不跟符号链接；目录不存在视为无事可做；单个删不掉不影响其余，错误合并返回后由 `main` 记一行 warn，**不阻断启动**
+- **工具结果展示**（P3.7b）：`EventToolResult.Text` 改成「首行摘要 + 展示块」；`repl` 在正文之间插入 `⎿ read_file 完成（42 B）`，diff 行按 `+`/`-` 着绿/红、列表缩进，展示块限 12 行并说明省略了多少（`read_file` 的整段内容否则会刷屏）；失败行用红色，避免和"又一条进展"混淆
 - **权限弹窗**（P3.7a）：`agentcore.PermissionPrompt` 是工具与界面之间的双向通路（工具侧阻塞问、界面侧一读一答），带「本会话总是允许」缓存（键 `tool|op|目录`）；`repl` 弹窗三项「允许一次 / 本会话总是允许 / 拒绝」，`1·2·3` 或 `y·a·n·Esc` 直答，`Ctrl+C` 拒绝并退出；弹窗期间按键不进输入框，作答后在记录里留一行痕迹。**装配修正**：此前 6 个工具拿到的都是 `nil` perm（只读模式），现在由 `main.buildTools` 真正传入通路
 - `internal/appstate`：回合状态与**唯一的工具循环**（ADR-001）。请求 → 读事件 → 有工具就执行并回灌 → 再请求；25 轮上限、连续 3 次失败追加换做法提示；工具失败也回灌给模型；`EventToolResult` 让界面看到调用结果
 - `internal/agentcore`：`New` 装配 `appstate`（取代 P2 的 `Direct`，已删除）；`main.buildEnv` 装配 `filesystem.Guard` 与 6 个工具并注册

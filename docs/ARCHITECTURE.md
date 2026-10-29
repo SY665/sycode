@@ -315,6 +315,7 @@ sycode/
 │   ├── session/                # store.go、event.go、projection.go、path.go
 │   ├── tools/                  # tool.go、registry.go、read_file.go、write_file.go、
 │   │                           # edit_file.go、glob.go、grep.go、bash.go
+│   ├── cleanup/                # cleanup.go（过期 artifact 回收）
 │   └── logging/                # logging.go
 ├── docs/
 ├── .ai-interactions/

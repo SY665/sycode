@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 21:10 | 阶段：**P3** | 当前单元：3.7a 已完成，下一单元 3.7b（展示渲染）
+更新时间：2026-10-29 22:15 | 阶段：**P4** | 当前单元：P3 全部收口（3.1–3.8），下一单元 4.1（`session.Store`）
 
 ## 已完成（本阶段）
 
@@ -86,28 +86,45 @@
   - **装配修正（真 bug）**：`buildTools` 此前给 6 个工具全传 `nil` —— "只读模式"不是设计选择而是接线漏了。
     现在 `buildTools(guard, perm)` 真传通路；`TestWriteToolAsksThenWrites` 用真 write_file + 真 Guard
     验"允许后落盘、拒绝后零副作用"
-- 代码 11,508 行（源码 5,787 / 测试 5,721），29 笔提交；直接依赖 7 个
-- 记录：`output-1..7_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 3.7b 已收口（`appstate/turn.go` +48、`repl.go` +47，测试 +170）：
+  - `EventToolResult.Text` 改成「**首行摘要 + 展示块**」；**不给 `llm.StreamEvent` 加 `Display` 字段**
+    —— 那要 llm 认识"给人看的 diff"，而 `Display.Lines` 本就是拼好的文本行，压成字符串不丢信息
+  - 界面只认一条约定（首行是摘要）+ 三种行形态（`+ `/`- `/其它`），不需要知道是 diff 还是列表
+  - 截断在 `appstate`（`maxDisplayLines=12`）：与 `clip` 的 32KiB 同属"信息取舍"，放一处
+  - `repl` 先 flush 正文再落结果行（否则顺序倒放）；失败行用红色而非暗色（暗色会被读成"又一条进展"）
+  - `tool_start` 不渲染：与 `tool_result` 描述同一次调用，一起显示就是重复
+- 单元 3.8 已收口（`cleanup/cleanup.go` 105 + 测试 133；`main.run` 接线 6 行）：
+  - `Run()` / `runAt(now)`（可注入时钟）/ `pruneExpired(dir, cutoff)`；artifact 保留 **7 天**
+  - 只删**平铺的普通文件**：不递归、不跟符号链接（`entry.Info()` 本就是 Lstat）；目录不存在当无事可做
+  - 单个文件删不掉不中断整轮（`errors.Join` 合并返回），`main` 只 `slog.Warn` 一行，**不阻断启动**
+  - 边界口径是"**不晚于** cutoff 即清"；测试里拿文件自己的 mtime 当 cutoff
+    （两次 `time.Now()` 之间有微秒差，推算出来的 cutoff 测不到"恰好等于"）
+  - 真二进制验过：8 天前的被删、1 分钟前的保留、日志 `已清理过期的工具输出 count=1`
+  - `logs`/`sessions` 回收**故意没接**：前者路径还在 `logging` 私有函数里，后者 P4 才有格式
+- **P3 全部收口**（3.1–3.8）
+- 代码 11,990 行（源码 5,973 / 测试 6,017），31 笔提交；直接依赖 7 个
+- 记录：`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P3 单元 3.7b —— 展示渲染**（只动 `repl`，不碰契约，可预授权直接开工）：
+**P4 单元 4.1 —— `internal/session`（store / event / path 三个文件）**
 
-1. `EventToolResult` 在正文之间插一行摘要：`⎿ read_file 完成（42 B）` / `⎿ bash 失败：退出码 1`。
-   事件里已有 `Text`（`appstate.summarizeResult` 产出），界面缺的只是渲染
-2. `DisplayDiff`：`+` 绿、`-` 红、`@@` 与其余行暗色。目前 `write_file`/`edit_file` 的 `Display`
-   没有任何消费方；事件流里还没有 `Display` 通道，**需要先决定**：`EventToolResult` 加
-   `Display *tools.Display`（改 llm 的事件结构 = 契约，得先问），或在 `tools.Result` 之外另发一条
-3. `DisplayList`：缩进列表（`glob` 的文件名、`grep` 的 `路径:行号: 内容`）
-4. 长路径 / 长行：弹窗与列表按窗口宽换行或截断（`lipgloss.Width`），窄窗口不撑破布局
-5. 验收：模型改一个文件 → 屏幕上有彩色 diff；grep 结果有缩进；工具结果行夹在正文之间
+按 `CODE-DESIGN.md` §6 的表实现，签名已定，不要现场改：
 
-**别顺手做**：`EventToolStart` 不渲染。那只是模型的调用快照，与 `EventToolResult` 会重复；
-等 2 的通道定了再一起考虑。
+1. `event.go`：`Event{Seq uint64, Kind EventKind, TS time.Time, Data json.RawMessage}`、
+   `NewEvent(kind, payload any)`、`Decode(v any)`；4 种 Kind（`compaction_applied` 只预留，不产生）
+2. `path.go`：`namespaceDirName(workingDir)` = 目录名（sanitize 掉非法字符）+ `-` +
+   `sha1(绝对路径)` 前 10 位。同名项目不能互相覆盖；Windows 盘符与大写要先折叠
+3. `store.go`：`NewStore` / `Create`（写 `session_started`）/ `Append`（`O_APPEND`，追加时赋 seq）/
+   `Load` / `List` / `Latest`
+4. **约束**：`session` 不 import `llm`。投影结果用中立结构（`Turn`），转 `llm.Message` 在 `appstate`
+5. 验收：写 N 条 → `Load` → 逐字段相等；**坏行（半截 JSON）跳过并计数**，
+   一行坏掉不能让整个会话读不出来；`List` 按时间倒序，`Latest` 取最新
 
-**先想清楚**：第 2 条的"`Display` 怎么进界面"要么改 `llm.StreamEvent`（例外第 1 条，得问人），
-要么让 `appstate` 把 `Display` 压成文本塞进 `EventToolResult.Text`（不改契约，但丢结构化信息）。
-这一条开工前要问。
+**这一单元的规模正好卡在上限**（3 源文件）。`projection.go` 与恢复接线留给 4.2/4.3，别一次做完。
+**开工前先看**：`ARCHITECTURE.md` §4.4 的存储布局（`sessions/<目录名>-<sha1前10>/<session-id>/transcript_events.jsonl`
++ `index.json`）。`index.json` 可以先不写（`List` 靠扫目录 + 读每条的首尾事件），
+真需要了再加——两处写索引必然会不一致。
 
 ## 已知坑 / 需要绕过的东西
 

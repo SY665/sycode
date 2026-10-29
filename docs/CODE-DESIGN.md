@@ -545,6 +545,7 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 | `handleEvents` | `func (s *State) handleEvents(ctx context.Context, ch <-chan llm.StreamEvent, out chan<- llm.StreamEvent) (calls []llm.ToolCall, err error)` | 转发 UI、收集工具调用 |
 | `executeTools` | `func (s *State) executeTools(ctx context.Context, calls []llm.ToolCall, out chan<- llm.StreamEvent) []llm.Message` | 逐个执行，发 `tool_start`/`tool_end` |
 | `executeOne` | `func (s *State) executeOne(ctx context.Context, c llm.ToolCall) (tools.Result, error)` | 查表 → 校验 → Guard → 询问 → 执行 |
+| `summarizeResult` / `displayBlock` | `func summarizeResult(call llm.ToolCall, result tools.Result, err error) string`、`func displayBlock(d *tools.Display) string` | `EventToolResult.Text` 的**首行摘要**与展示块（diff 行、匹配列表，`maxDisplayLines=12` 截断并说明） |
 | `shouldContinue` | `func (s *State) shouldContinue(turn int, calls []llm.ToolCall) bool` | 轮次上限 25 / 无调用即停 |
 
 **循环只在这里**。`llm` 的每个 provider 只做一次请求，不持有循环。
@@ -606,7 +607,7 @@ type AgentCore interface {
 |---|---|---|
 | `Deps` | `type Deps struct { Version, Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; Ctx context.Context }`（P3.7 加 `Permission`；`Store` 待 P4） | 界面只拿展示、回合引擎与权限通路，不碰 `llm.Client` |
 | `submit` | `func (m Model) submit() (tea.Model, tea.Cmd)` | `/exit` 退出；调 `Core.Submit`，成功后进入流式状态并返回 `waitEvent` |
-| `handleStreamEvent` | `func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd)` | 正文累积、`EventRetry` 提示、终态收尾；其余事件 P2 不展示 |
+| `handleStreamEvent` | `func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd)` | 正文累积、`EventRetry` 提示、`EventToolResult` 落成摘要 + 展示块、终态收尾；`tool_start`/`usage` 不渲染 |
 | `finishTurn` | `func (m Model) finishTurn(err error)` | 正文落历史 → 中断提示 → 错误提示；清流式状态 |
 | `interrupt` | `func (m Model) interrupt()` | `Esc` 调 `Core.Interrupt`，**不立即改状态**：等流自己收尾，避免两处状态不一致 |
 | `context` | `func (m Model) context() context.Context` | 取注入的 ctx，测试不必构造 |
@@ -623,6 +624,7 @@ type AgentCore interface {
 | `answerPermission` | `func (m Model) answerPermission(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)` | `1/y` 允许一次、`2/a` 本会话总是允许、`3/n/Esc` 拒绝、`Ctrl+C` 拒绝并退出；其它键不响应（弹窗是模态的） |
 | `respond` / `permissionNote` | `func (m Model) respond(decision agentcore.Decision) (tea.Model, tea.Cmd)`、`func permissionNote(req, decision) string` | 送回答案、记一行留痕（"已允许一次 / 本会话不再询问 / 已拒绝"）、重新等待下一次 |
 | `renderPermission` / `opText` | `func (m Model) renderPermission() string`、`func opText(op string) string` | 弹窗占用输入框位置：工具名 + 中文动词 + 路径 + Detail + 三个选项 |
+| `appendToolResult` / `displayLine` | `func (m *Model) appendToolResult(ev llm.StreamEvent)`、`func displayLine(line string) string` | 先 flush 正文再落结果行（"⎿ 摘要"）；展示块按行首 `+ `/`- ` 上绿/红，其余暗色 |
 
 子包各自的入口（只列一个代表函数，避免过度规定）：
 
@@ -639,11 +641,15 @@ type AgentCore interface {
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Run` | `func Run() error` | 依次回收 artifact(7d) / logs(14d) / sessions(14d) / history(1000 条) |
-| `pruneExpired` | `func pruneExpired(dir string, cutoff time.Time) (removed int, err error)` | 按 mtime，跳过符号链接 |
-| `pruneHistory` | `func pruneHistory(path string, keep int) error` | 保留最后 N 条 |
+| `Run` | `func Run() error` | 回收过期工具输出（P3.8 只接 artifact，7 天） |
+| `runAt` | `func runAt(now time.Time) error` | 可注入时钟的版本；保留期判定必须能在测试里控时间 |
+| `pruneExpired` | `func pruneExpired(dir string, cutoff time.Time) (int, error)` | 删掉 `dir` 下 mtime 不晚于 `cutoff` 的**普通文件**；不递归、不跟符号链接；目录不存在视为无事可做；单个删不掉不中断整轮（`errors.Join` 合并返回） |
+| `pruneHistory` | `func pruneHistory(path string, keep int) error` | 保留最后 N 条（输入历史，P4 接入时再写） |
 
-失败必须**只记日志**：回收是尽力而为，不能让启动失败。
+失败必须**只记日志**：回收是尽力而为，不能让启动失败。`main.run()` 在 `logging.Init` 之后、装配之前调一次，失败 `slog.Warn`。
+
+> `logs` / `sessions` 的回收**暂不接**：前者的路径来源在 `logging` 里还是私有的，后者要到 P4 才有格式。
+> 到那时给 `logging` 加一个导出的目录函数，再把三类一起挂到 `Run` 上——现在先不为了"对称"多绕一层。
 
 ## 11. 反面清单（出现即打回）
 

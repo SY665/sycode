@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sy665/sycode/internal/agentcore"
+	"github.com/sy665/sycode/internal/cleanup"
 	"github.com/sy665/sycode/internal/cli/cmd"
 	"github.com/sy665/sycode/internal/config"
 	"github.com/sy665/sycode/internal/filesystem"
@@ -39,15 +40,21 @@ func main() {
 //
 // 启动顺序见 docs/CODE-DESIGN.md §1：日志必须最先就绪，后续步骤才有地方报错。
 func run() int {
-	cleanup, logPath, err := logging.Init()
+	closeLog, logPath, err := logging.Init()
 	if err != nil {
 		// 日志没起来时只能用 stderr；这条错误本身必须可读（CODING-STANDARDS §13）。
 		fmt.Fprintf(os.Stderr, "错误：初始化日志失败：%v\n", err)
 		return 1
 	}
-	defer cleanup()
+	defer closeLog()
 
 	slog.Debug("日志已初始化", "path", logPath)
+
+	// 回收过期工具输出：放在日志就绪之后（这样失败有地方记），装配之前（不占用户等待时间）。
+	// 失败只记一行：回收是尽力而为，不能因为删不掉旧文件就起不来。
+	if err := cleanup.Run(); err != nil {
+		slog.Warn("清理过期工具输出失败，本次启动继续", "err", err)
+	}
 
 	root := cmd.NewRootCommand(cmd.Options{
 		Version:  version,
