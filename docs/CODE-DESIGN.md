@@ -91,11 +91,11 @@ run() int
 
 | 元素 | 签名 | 职责 |
 |---|---|---|
-| `Env` | `type Env struct { Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt }` | 进入界面前要准备好的东西：标题用的模型名、回合引擎、权限通路（同一对象也交给了工具，界面只是取用） |
-| `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer; BuildEnv func() (Env, error); StartREPL func(model string) error }` | 注入版本、输出与环境构造函数；后两项是测试替换点 |
-| `NewRootCommand` | `func NewRootCommand(opts Options) *cobra.Command` | 建 root + `version` + `run` 子命令；同时完成汉化 |
-| `runREPL` | `func runREPL(opts Options) error` | 先准备环境（失败则不进界面、退出 1），再把模型名与引擎交给界面 |
-| `buildEnv` | `func buildEnv(opts Options) (Env, error)` | 调注入的构造函数；未注入视为"没有模型、没有引擎"，只测命令树时不必造配置 |
+| `Env` | `type Env struct { Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; History []agentcore.Turn; RestoredNote string }` | 进入界面前要准备好的东西：模型名、回合引擎、权限通路、恢复出来的历史（屏幕用；上下文由 `Core.Restore` 自己恢复） |
+| `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer; BuildEnv func(newSession bool) (Env, error); StartREPL func(model string) error }` | 注入版本、输出与环境构造函数；`BuildEnv` 的参数是 `--new`（P4.2 起） |
+| `NewRootCommand` | `func NewRootCommand(opts Options) *cobra.Command` | 建 root + `version` + `run` 子命令、注册 `--new`；同时完成汉化 |
+| `runREPL` | `func runREPL(opts Options, newSession bool) error` | 先准备环境（失败则不进界面、退出 1），再把模型名、引擎、历史交给界面 |
+| `buildEnv` | `func buildEnv(opts Options, newSession bool) (Env, error)` | 调注入的构造函数；未注入视为"没有模型、没有引擎"，只测命令树时不必造配置 |
 | `newVersionCmd` | `func newVersionCmd(opts Options) *cobra.Command` | 输出 `0.1.0 (build abc1234)` |
 | `newRunCmd` | `func newRunCmd() *cobra.Command` | headless 单回合（P4 实装） |
 | `versionString` | `func versionString(opts Options) string` | 有提交号才带 `(build …)`，避免空括号 |
@@ -512,6 +512,7 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 | `store.go` | `NewStore` | `func NewStore(workingDir string) (*Store, error)`（只算路径，不建目录） |
 | | `Create` | `func (s *Store) Create() (*Session, error)`（建目录 + 写 `session_started`） |
 | | `Append` | `func (s *Store) Append(sess *Session, ev Event) error`（`O_APPEND`，`Seq` 与零值 `TS` 在这里补） |
+| | `Open` | `func (s *Store) Open(id string) (*Session, error)`（重开已有会话，序号从最后一条有效事件续上） |
 | | `Load` | `func (s *Store) Load(id string) (*Loaded, error)` |
 | | `List` | `func (s *Store) List() ([]Summary, error)`（扫目录，按 `Updated` 倒序） |
 | | `Latest` | `func (s *Store) Latest() (Summary, bool, error)` |
@@ -544,6 +545,7 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 |---|---|---|
 | `Deps` | `type Deps struct { Client llm.Client; Tools *tools.Registry; Guard *filesystem.Guard; Perm tools.PermissionRequester; Store *session.Store; Session *session.Session; MaxTurns int }` | 显式依赖，不用全局；会话库为空就不落盘 |
 | `record` | `func (s *State) record(kind session.EventKind, payload any)` | 追加一条会话事件；**失败只记日志**（存不下历史不该中断对话） |
+| `Restore` | `func (s *State) Restore(turns []session.Turn)` | 把恢复出来的回合灌进历史：**只放正文**（tool 消息必须挂在带 id 的 `tool_calls` 后，而库里只有摘要）；没有用户输入的孤立回答跳过（会形成连续两条 assistant） |
 | `New` | `func New(d Deps) *State` | 只存引用 |
 | `Messages` | `func (s *State) Messages() []llm.Message` | 返回副本，防外部改写 |
 | `Append` | `func (s *State) Append(m llm.Message)` | |
@@ -583,7 +585,9 @@ type AgentCore interface {
 |---|---|---|
 | `Core` | `type Core struct { state *appstate.State }` | 正式实现；`var _ AgentCore = (*Core)(nil)` 在编译期确认方法齐全 |
 | `New` | `func New(client llm.Client, registry *tools.Registry, guard *filesystem.Guard, perm tools.PermissionRequester, system string) AgentCore` | 把依赖直接传给 `appstate.New`（不落盘） |
-| `NewWithSession` | `func NewWithSession(client, registry, guard, perm, system, store *session.Store, sess *session.Session) AgentCore` | 同上并挂上会话库；单开一个构造函数而不改 `New` 的签名：落盘与否本来就是两种装配 |
+| `NewWithSession` | `func NewWithSession(client, registry, guard, perm, system, store *session.Store, sess *session.Session) *Core` | 同上并挂上会话库；**返回具体类型**，因为装配完通常还要补一句 `Restore`，而"恢复"不是界面能力 |
+| `Restore` | `func (c *Core) Restore(turns []session.Turn)` | 转发给 `state.Restore`，只在启动装配时调一次 |
+| `Turn` | `type Turn = session.Turn` | 别名：界面与 `cmd.Env` 传历史时不必 import 存储层 |
 | `Submit` / `Interrupt` / `Messages` / `Clear` | 四个方法 | 全部转发给 `state`，本身不含逻辑 |
 
 > P2 曾有一个 `Direct`（自带历史与取消句柄），P3.6 起改成 `appstate` 的薄包装并删除了 `Direct`：
@@ -620,7 +624,8 @@ type AgentCore interface {
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Deps` | `type Deps struct { Version, Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; Ctx context.Context }`（P3.7 加 `Permission`；`Store` 待 P4） | 界面只拿展示、回合引擎与权限通路，不碰 `llm.Client` |
+| `Deps` | `type Deps struct { Version, Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; History []agentcore.Turn; Restored string; Ctx context.Context }`（P4.2 加 `History`/`Restored`；`Store` 不必给界面，落盘在 `appstate`） | 界面只拿展示、回合引擎、权限通路与历史 |
+| `NewModel` | `func NewModel(d Deps) Model` | 建状态并把 `History` 落进记录：**恢复说明在最上、分隔线在最下**，否则用户会把旧内容当成刚发生的 |
 | `submit` | `func (m Model) submit() (tea.Model, tea.Cmd)` | `/exit` 退出；调 `Core.Submit`，成功后进入流式状态并返回 `waitEvent` |
 | `handleStreamEvent` | `func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd)` | 正文累积、`EventRetry` 提示、`EventToolResult` 落成摘要 + 展示块、终态收尾；`tool_start`/`usage` 不渲染 |
 | `finishTurn` | `func (m Model) finishTurn(err error)` | 正文落历史 → 中断提示 → 错误提示；清流式状态 |

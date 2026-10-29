@@ -785,3 +785,43 @@ func TestTurnWithoutStoreDoesNotFail(t *testing.T) {
 		t.Errorf("应以 done 收尾：%+v", final)
 	}
 }
+
+func TestRestoreBuildsAlternatingHistory(t *testing.T) {
+	state := New(Deps{Tools: tools.NewRegistry(), System: "你是 SyCode。"})
+	state.Restore([]session.Turn{
+		{User: "第一问", Assistant: "第一答"},
+		// 孤立回答：界面上要显示，但不该进上下文（会造成连续两条 assistant）。
+		{Assistant: "上一轮的残句"},
+		{User: "第二问", Assistant: "第二答"},
+	})
+
+	msgs := state.Messages()
+	want := []struct {
+		role llm.Role
+		text string
+	}{
+		{llm.RoleUser, "第一问"},
+		{llm.RoleAssistant, "第一答"},
+		{llm.RoleUser, "第二问"},
+		{llm.RoleAssistant, "第二答"},
+	}
+	if len(msgs) != len(want) {
+		t.Fatalf("应有 %d 条消息，实际 %d：%+v", len(want), len(msgs), msgs)
+	}
+	for i, expect := range want {
+		if msgs[i].Role != expect.role || msgs[i].Content != expect.text {
+			t.Errorf("第 %d 条不符：%+v", i, msgs[i])
+		}
+	}
+}
+
+func TestRestoreKeepsUserOnlyTurn(t *testing.T) {
+	state := New(Deps{Tools: tools.NewRegistry(), System: "你是 SyCode。"})
+	// 上一次提问后没有回答（用户按了 Esc 或进程被杀）：问题仍然该留在上下文里。
+	state.Restore([]session.Turn{{User: "问了一半"}})
+
+	msgs := state.Messages()
+	if len(msgs) != 1 || msgs[0].Role != llm.RoleUser {
+		t.Fatalf("应只有一条用户消息：%+v", msgs)
+	}
+}

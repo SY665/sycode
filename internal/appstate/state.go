@@ -74,6 +74,32 @@ func (s *State) Clear() {
 	s.messages = nil
 }
 
+// Restore 把恢复出来的回合灌进历史。
+//
+// 只放正文：**工具调用不进去**。tool 消息必须挂在一个带 id 与参数的 tool_calls 后面，
+// 而会话库里只存了摘要——硬塞会让下一次请求的消息序列非法，模型直接报错。
+// 代价是重启后模型不知道"上次跑过什么"，用户却看得到（界面用的是同一份 Turn）。
+// 要让模型也知道，就得在 AssistantTurn 里存完整调用，那是改存储格式，另作决定。
+//
+// 没有用户输入的孤立回答跳过：它在界面上有位置，但在上下文里会形成连续两条 assistant
+// 消息，破坏 user/assistant 交替，部分供应商会拒收。
+func (s *State) Restore(turns []session.Turn) {
+	restored := make([]llm.Message, 0, len(turns)*2)
+	for _, turn := range turns {
+		if turn.User == "" {
+			continue
+		}
+		restored = append(restored, llm.Message{Role: llm.RoleUser, Content: turn.User})
+		if turn.Assistant != "" {
+			restored = append(restored, llm.Message{Role: llm.RoleAssistant, Content: turn.Assistant})
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, restored...)
+}
+
 // Interrupt 取消进行中的回合；没有回合时是空操作。
 func (s *State) Interrupt() {
 	s.mu.Lock()

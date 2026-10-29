@@ -309,3 +309,63 @@ func TestShortenTitle(t *testing.T) {
 		t.Errorf("长标题应截到 %d 个字加省略号：%q（%d 字）", titleRunes, got, len(runes))
 	}
 }
+
+func TestOpenContinuesSequence(t *testing.T) {
+	store := newTestStore(t, t.TempDir())
+	first := mustCreate(t, store)
+	mustAppend(t, store, first, KindUserMessage, UserMessage{Text: "上次说的话"})
+
+	// 新进程通常拿不到旧的 Session 对象，只能靠 ID 重开。
+	reopened, err := store.Open(first.ID)
+	if err != nil {
+		t.Fatalf("重开失败：%v", err)
+	}
+	if reopened.ID != first.ID {
+		t.Errorf("ID 应保持不变：%q", reopened.ID)
+	}
+	mustAppend(t, store, reopened, KindUserMessage, UserMessage{Text: "这次接着说"})
+
+	loaded, err := store.Load(first.ID)
+	if err != nil {
+		t.Fatalf("读回失败：%v", err)
+	}
+	// started(1) + 上次(2) + 这次(3)：序号若从 1 重新数，就会覆盖已有事件。
+	if len(loaded.Events) != 3 {
+		t.Fatalf("应有 3 条事件，实际 %d", len(loaded.Events))
+	}
+	if got := loaded.Events[2].Seq; got != 3 {
+		t.Errorf("续写的序号应为 3，实际 %d", got)
+	}
+}
+
+func TestOpenIgnoresCorruptTailWhenNumbering(t *testing.T) {
+	store := newTestStore(t, t.TempDir())
+	sess := mustCreate(t, store)
+	mustAppend(t, store, sess, KindUserMessage, UserMessage{Text: "正常"})
+
+	path := filepath.Join(store.dir, sess.ID, transcriptFile)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("打开会话文件失败：%v", err)
+	}
+	if _, err := file.WriteString("{\"seq\":99,\"kind\":\"user_mess"); err != nil {
+		t.Fatalf("写半行失败：%v", err)
+	}
+	file.Close()
+
+	reopened, err := store.Open(sess.ID)
+	if err != nil {
+		t.Fatalf("重开失败：%v", err)
+	}
+	mustAppend(t, store, reopened, KindUserMessage, UserMessage{Text: "继续"})
+
+	loaded, err := store.Load(sess.ID)
+	if err != nil {
+		t.Fatalf("读回失败：%v", err)
+	}
+	last := loaded.Events[len(loaded.Events)-1]
+	// 半截那行里的 99 不算数：只有读得出来的事件才能决定下一个序号。
+	if last.Seq != 3 {
+		t.Errorf("序号应接着最后一条有效事件，实际 %d", last.Seq)
+	}
+}

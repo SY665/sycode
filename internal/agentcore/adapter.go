@@ -10,6 +10,9 @@ import (
 	"github.com/sy665/sycode/internal/tools"
 )
 
+// Turn 是恢复出来的一轮对话。别名指向 session：界面不该为了显示历史去 import 存储层。
+type Turn = session.Turn
+
 // Core 是 AgentCore 的正式实现：把调用转给 appstate。
 //
 // 这一层刻意薄：它存在的唯一目的是让界面不依赖 appstate。
@@ -32,10 +35,10 @@ func New(client llm.Client, registry *tools.Registry, guard *filesystem.Guard,
 
 // NewWithSession 在 New 的基础上挂上会话库：回合结束把 user/assistant 追加进 JSONL。
 //
-// 单开一个构造函数而不是给 New 加参数：New 的签名写进了 CODE-DESIGN §8，改它要动文档与所有调用点；
-// 而"要不要落盘"本来就是两种装配——测试与将来的 headless 预览都不需要库。
+// 返回具体类型而不是 AgentCore：调用方通常在装配完成后还要补一句 Restore（把上次的历史
+// 灌回来），而"恢复"不是界面能力，不该塞进 AgentCore 接口。
 func NewWithSession(client llm.Client, registry *tools.Registry, guard *filesystem.Guard,
-	perm tools.PermissionRequester, system string, store *session.Store, sess *session.Session) AgentCore {
+	perm tools.PermissionRequester, system string, store *session.Store, sess *session.Session) *Core {
 	return &Core{state: appstate.New(appstate.Deps{
 		Client:  client,
 		Tools:   registry,
@@ -60,3 +63,6 @@ func (c *Core) Messages() []llm.Message { return c.state.Messages() }
 
 // Clear 清空历史。
 func (c *Core) Clear() { c.state.Clear() }
+
+// Restore 把上次会话的历史灌回来。只应在启动装配时调用一次。
+func (c *Core) Restore(turns []session.Turn) { c.state.Restore(turns) }

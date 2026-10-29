@@ -167,6 +167,28 @@ func (s *Session) append(ev Event) error {
 	return nil
 }
 
+// Open 重新打开一个已有会话，接着往后写。
+//
+// 序号必须从文件里最后一条有效事件续上：从头数会覆盖已有事件，
+// 而 readEvents 的口径（坏行跳过）与写入端一致，所以半行不会让序号倒退。
+func (s *Store) Open(id string) (*Session, error) {
+	if id == "" {
+		return nil, errors.New("参数错误：会话 ID 为空")
+	}
+	path := filepath.Join(s.dir, id, transcriptFile)
+
+	events, _, err := readEvents(path)
+	if err != nil {
+		return nil, err
+	}
+
+	next := uint64(1)
+	if len(events) > 0 {
+		next = events[len(events)-1].Seq + 1
+	}
+	return &Session{ID: id, dir: filepath.Join(s.dir, id), file: path, next: next}, nil
+}
+
 // Load 读回一个会话的全部事件。
 func (s *Store) Load(id string) (*Loaded, error) {
 	if id == "" {

@@ -52,6 +52,12 @@ type Deps struct {
 	// Permission 是权限询问通路；为空时不弹窗（工具侧会因"没有确认通道"而拒绝）。
 	Permission *agentcore.PermissionPrompt
 
+	// History 是恢复出来的历史对话；界面先把它画出来，否则重启后屏幕一片空白，
+	// 用户会以为"接着聊"接的是空上下文。
+	History []agentcore.Turn
+	// Restored 是标题下那行说明（会话 ID 与轮数）；空串表示新会话。
+	Restored string
+
 	// Ctx 由 Run 注入，供 Submit 使用；为空时退回 Background。
 	Ctx context.Context
 }
@@ -89,7 +95,26 @@ func NewModel(d Deps) Model {
 	// Enter 用来提交，因此必须解绑 textarea 自带的"插入换行"，否则永远提交不了。
 	ta.KeyMap.InsertNewline.SetEnabled(false)
 
-	return Model{deps: d, input: ta}
+	m := Model{deps: d, input: ta}
+
+	// 恢复的历史先落进记录，并把"这是上一次的"说明放在最上面：
+	// 不说清楚的话，用户会把这些内容当成刚发生的。
+	if d.Restored != "" {
+		m.append(dimStyle.Render(d.Restored))
+	}
+	for _, turn := range d.History {
+		if turn.User != "" {
+			m.append("› " + turn.User)
+		}
+		if turn.Assistant != "" {
+			m.append(turn.Assistant)
+		}
+	}
+	if len(m.transcript) > 0 {
+		m.append(dimStyle.Render("—— 以上是上次会话 ——"))
+	}
+
+	return m
 }
 
 // Init 让输入框获得焦点；Bubble Tea 会在启动后发送窗口尺寸事件。

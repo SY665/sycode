@@ -27,6 +27,11 @@ type Env struct {
 	// Permission 是权限询问通路：工具侧往里放请求，界面侧取出来弹窗。
 	// 两侧拿的是同一个对象，因此它既不属于 Core 也不属于界面，由这里一并转交。
 	Permission *agentcore.PermissionPrompt
+	// History 是恢复出来的历史对话，界面启动时先把它画出来。
+	// 上下文由 Core 自己恢复（Core.Restore），这里只管"屏幕上有东西"。
+	History []agentcore.Turn
+	// RestoredNote 是标题下那行说明，例如「已恢复 20261029-201835-0b30（3 轮）」，空串表示新会话。
+	RestoredNote string
 }
 
 // Options 注入进程级依赖。输出目标可替换，便于测试断言终端文案。
@@ -40,7 +45,8 @@ type Options struct {
 	//
 	// 之所以交给调用方延迟执行、而不是在 run() 里算好传进来：版本、帮助不需要密钥，
 	// 提前解析会让 `sycode --version` 在没有 key 的机器上直接失败。
-	BuildEnv func() (Env, error)
+	// 参数是 `--new`：由调用方决定恢复上次会话还是新建。
+	BuildEnv func(newSession bool) (Env, error)
 
 	// StartREPL 允许测试替换交互入口，参数是已解析的模型名。为空时走真实界面。
 	// 不这样做的话，"无参数启动"的测试会真的把终端交给 Bubble Tea，在交互式终端里跑 go test 时会挂住。
@@ -52,6 +58,9 @@ type Options struct {
 // 汉化策略：cobra 没有 i18n，内置错误（未知参数、缺少取值）在 SetFlagErrorFunc
 // 与 translateFlagError 里统一转成中文；映射不到的原样保留，避免把真实错误吞掉。
 func NewRootCommand(opts Options) *cobra.Command {
+	// --new 只是个开关：值存在这里，进 runREPL 时再传下去，cmd 树里其它方法不必都知道它。
+	newSession := false
+
 	root := &cobra.Command{
 		Use:   "sycode",
 		Short: "终端里的 AI 编程代理",
@@ -66,7 +75,7 @@ func NewRootCommand(opts Options) *cobra.Command {
 			if len(args) > 0 {
 				return usageErrorf("未知命令 %q。可用命令见 sycode --help", args[0])
 			}
-			return runREPL(opts)
+			return runREPL(opts, newSession)
 		},
 	}
 
@@ -92,6 +101,9 @@ func NewRootCommand(opts Options) *cobra.Command {
 
 	root.AddCommand(newVersionCmd(opts), newRunCmd())
 
+	// 默认恢复本工作目录的上一次会话；--new 明确要求从头开始。
+	root.Flags().BoolVar(&newSession, "new", false, "不恢复上次会话，新建一个")
+
 	// cobra 自动加的 -h/-v 说明是英文（help for sycode / version for sycode）。
 	// 先让 cobra 把默认 flag 建出来，再逐条覆盖；两个 flag set 都查一遍，
 	// 因为不同 cobra 版本挂载位置不同。
@@ -107,8 +119,8 @@ func NewRootCommand(opts Options) *cobra.Command {
 //
 // 准备失败（缺密钥、配置写错）属于"用户需要去动手"，不是用法错误：
 // 原样返回让 main 打一行"错误：…"并退出 1，不进入界面，也不刷用法提示。
-func runREPL(opts Options) error {
-	env, err := buildEnv(opts)
+func runREPL(opts Options, newSession bool) error {
+	env, err := buildEnv(opts, newSession)
 	if err != nil {
 		return err
 	}
@@ -120,16 +132,18 @@ func runREPL(opts Options) error {
 		Model:      env.Model,
 		Core:       env.Core,
 		Permission: env.Permission,
+		History:    env.History,
+		Restored:   env.RestoredNote,
 	})
 }
 
 // buildEnv 调用注入的构造函数；未注入时按"没有模型、没有引擎"处理，界面照常可用。
 // 这样只测命令树（帮助、版本、参数错误）时不必构造注册表与配置文件。
-func buildEnv(opts Options) (Env, error) {
+func buildEnv(opts Options, newSession bool) (Env, error) {
 	if opts.BuildEnv == nil {
 		return Env{}, nil
 	}
-	return opts.BuildEnv()
+	return opts.BuildEnv(newSession)
 }
 
 // newVersionCmd 提供 `sycode version`，与 `--version` 等价。

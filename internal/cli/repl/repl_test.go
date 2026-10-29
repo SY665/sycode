@@ -659,3 +659,37 @@ func TestToolResultFailureIsMarked(t *testing.T) {
 		t.Error("失败行不该用暗色，否则和普通进展分不开")
 	}
 }
+
+func TestRestoredHistoryIsDrawn(t *testing.T) {
+	m := NewModel(Deps{
+		Version: "0.1.0",
+		History: []agentcore.Turn{
+			{User: "上次问的", Assistant: "上次答的"},
+			{User: "又问了一句"},
+		},
+		Restored: "已恢复 20261029-201835-0b30（2 轮）",
+	})
+
+	joined := strings.Join(m.transcript, "\n")
+	for _, want := range []string{"已恢复 20261029-201835-0b30", "› 上次问的", "上次答的", "› 又问了一句", "以上是上次会话"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("恢复的历史里缺 %q：%q", want, m.transcript)
+		}
+	}
+
+	// 顺序：说明在最上面，分隔线在最后。倒过来的话，用户会以为"已恢复"说的是刚发生的事。
+	if strings.Index(joined, "已恢复") > strings.Index(joined, "› 上次问的") {
+		t.Errorf("恢复说明应在历史之前：%q", m.transcript)
+	}
+	if !strings.Contains(m.transcript[len(m.transcript)-1], "以上是上次会话") {
+		t.Errorf("分隔线应在最后一行：%q", m.transcript[len(m.transcript)-1])
+	}
+}
+
+func TestNewSessionDrawsNothing(t *testing.T) {
+	// 新会话不该出现"已恢复"字样，也不该有那条分隔线。
+	m := NewModel(Deps{Version: "0.1.0"})
+	if len(m.transcript) != 0 {
+		t.Errorf("新会话不该有历史：%q", m.transcript)
+	}
+}

@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 23:55 | 阶段：**P4** | 当前单元：4.1/4.2前半/4.3 已完成，下一单元 4.2后半（恢复 + `--new`）
+更新时间：2026-10-29 24:30 | 阶段：**P4** | 当前单元：4.1/4.2/4.3 全部收口，下一单元 4.4（`/context` 占用）
 
 ## 已完成（本阶段）
 
@@ -126,25 +126,34 @@
   - `agentcore.NewWithSession` 负责装配，`New` 保持"不落盘"——落盘与否本来就是两种装配，不动既有签名
   - `main.openSession` 建库失败降级为"本次不落盘"，不拒绝启动
   - 二进制冒烟：隔离 home 下生成了 `sessions/sycode-0115d072e0/<ID>/transcript_events.jsonl`，首条 `session_started` 的 `work_dir` 正确
-- 代码 13,215 行（源码 6,665 / 测试 6,550），35 笔提交；直接依赖 7 个
-- 记录：`output-1..3_impl-*.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 4.2 后半已收口（恢复 + `--new`）：`store.go` +30、`state.go` +35、`adapter.go` +12、`repl.go` +25、`root.go` +25、`main.go` +60，测试 +170
+  - `Store.Open`：重开已有会话，序号取**最后一条有效事件** +1（半行里的 `seq:99` 不算数，否则会覆盖已有事件）
+  - `appstate.Restore`：**只放正文**，工具调用不进上下文（tool 消息必须挂在带 id 的 `tool_calls` 后，库里只有摘要）；
+    没有用户输入的孤立回答跳过（会造成连续两条 assistant，部分供应商拒收）——界面上仍显示它
+  - `agentcore.NewWithSession` 改返回 `*Core`：装配完通常要补一句 `Restore`，而"恢复"不该进 `AgentCore` 接口
+  - `cmd.Options.BuildEnv` 加参数 `newSession bool`（`--new`）；`Env` 加 `History`/`RestoredNote`
+  - `repl.NewModel` 把历史落进记录：**说明在最上、分隔线在最下**（反了用户会把旧内容当刚发生的）
+  - 端到端验过：第二次启动 `已恢复会话 turns=1` 且会话目录不增加；`--new` 后会话数 1→2
+- 代码 13,526 行（源码 6,801 / 测试 6,725），36 笔提交；直接依赖 7 个
+- 记录：`output-1..4_impl-*.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P4 单元 4.2 后半 —— 启动恢复 + `--new`**（`repl` + `cmd` + `appstate` 各一小处）
+**P4 单元 4.4 —— `/context` 占用显示**（`repl` 的斜杠命令 + `llm` 的量算）
 
-1. `appstate.Restore(turns []session.Turn)`：Turn → `llm.Message` 交替序列写进历史。
-   **只放正文**：`Tools` 不进消息（tool 消息必须对应带 id 的 `tool_calls`，库里只有摘要），
-   工具痕迹留给界面展示；这一限制要写进 `Restore` 的文档注释，别让后来人以为漏了
-2. `repl`：`Deps` 加 `Restored []agentcore.Turn`（或直接传 `*session.Loaded` 的投影），
-   启动后在标题下画一行 `已恢复 <ID>（N 轮）`
-3. `cmd/root.go`：`Options` 加 `NewSession bool`，绑定 `--new`；`Env` 已经把 Store 建好了，
-   所以恢复逻辑放 `main.buildEnv` 更顺——`--new` 时 `store.Create()`，否则 `store.Latest()` 命中就 `Load` + `BuildTurns`
-4. `main.buildEnv` 需要知道 `--new`：`buildEnv` 目前无参，改为 `buildEnv(newSession bool)` 或让 `cmd.Options` 传进去
-   （**这是改对外签名，属可预知的小事，但要同步 `CODE-DESIGN.md` §1 的启动顺序表**）
-5. 验收：真跑两轮 → 退出 → 同目录重启自动接上（标题下那行在）；`--new` 后是空历史；换目录看不到别人的会话
+1. 先定"估算"还是"精确"：v0.1 **估算**（字符数 / 3 ≈ token），标注成 `≈`；
+   `llm/estimate.go` 的 `Estimate` 目前空着（P2 主动延后），这一单元把它补上
+2. `repl` 需要斜杠命令的分发点：目前只有 `submit` 里的 `/exit` 特判。按 `CODE-DESIGN` §9 的
+   `commands` 子包计划，**先别建包**——两条命令而已，在 `repl.go` 里加一个 `handleCommand(text) bool`
+   就够；到 4.5 有四五条命令时再抽 `commands/`
+3. `/context` 输出：`历史 N 条 · 约 X / Y token（Z%）`，`Y` 来自模型的上下文窗口（注册表里要加字段，
+   那是改 `registry.yaml` 的 schema，**先问人**）。若不想动注册表，先只显示 `已用 ≈X token（不含窗口上限）`
+4. 验收：连问三轮 → `/context` 的数字随之变大；`/clear` 之后归零
 
-**别顺手做**：`/sessions` 选择器（4.5）、`/context`（4.4）。
+**这一格的真正难点不是代码，是"要不要动注册表"**：`providers.Model` 现在没有上下文窗口字段。
+想显示百分比就必须加，属改数据契约（例外 1），开工前问一句。
+
+**别顺手做**：`/sessions` 选择器（4.5）、压缩（P6）。
 
 ## 已知坑 / 需要绕过的东西
 

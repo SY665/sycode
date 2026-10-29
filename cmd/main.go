@@ -90,7 +90,7 @@ func run() int {
 //
 // 错误原样返回：config/providers 的文案已是中文且带修改指引（CODING-STANDARDS §13），
 // 这里再包一层只会得到"错误：无法准备运行环境：缺少密钥：…"这样的叠词。
-func buildEnv() (cmd.Env, error) {
+func buildEnv(newSession bool) (cmd.Env, error) {
 	registry, err := providers.Load()
 	if err != nil {
 		// 内嵌注册表损坏属于打包错误：用户改不了，但也不能静默退回默认值。
@@ -155,33 +155,76 @@ func buildEnv() (cmd.Env, error) {
 		return cmd.Env{}, err
 	}
 
-	// 会话库：拿到就落盘，拿不到就只在内存里跑——丢的是历史，不该是这次对话。
-	store, sess := openSession(workDir)
+	// 会话：默认续上本工作目录的上一次，--new 则新建。
+	store, sess, history, note := openSession(workDir, newSession)
+
+	core := agentcore.NewWithSession(client, writeRegistry, guard, perm,
+		llm.Build(promptEnv(resolved.ModelID, workDir)), store, sess)
+	if len(history) > 0 {
+		// 上下文由引擎自己恢复；界面拿到的 history 只用来把屏幕填上。
+		core.Restore(history)
+	}
 
 	return cmd.Env{
-		Model: resolved.ModelID,
-		Core: agentcore.NewWithSession(client, writeRegistry, guard, perm,
-			llm.Build(promptEnv(resolved.ModelID, workDir)), store, sess),
-		Permission: perm,
+		Model:        resolved.ModelID,
+		Core:         core,
+		Permission:   perm,
+		History:      history,
+		RestoredNote: note,
 	}, nil
 }
 
-// openSession 建立一个新会话。
+// openSession 打开会话库并决定"接着上次"还是"新建"。
 //
-// 每次启动都新建：恢复上一次是 4.2 接线的事，这里只负责"这次说的话别丢"。
-func openSession(workDir string) (*session.Store, *session.Session) {
+// 任何一步失败都降级为"本次不落盘"：丢的是历史，不该是这次对话。
+func openSession(workDir string, forceNew bool) (*session.Store, *session.Session, []session.Turn, string) {
 	store, err := session.NewStore(workDir)
 	if err != nil {
 		slog.Warn("会话目录不可用，本次对话不会落盘", "err", err)
-		return nil, nil
+		return nil, nil, nil, ""
 	}
+
+	if !forceNew {
+		history, sess, note := resume(store)
+		if sess != nil {
+			return store, sess, history, note
+		}
+	}
+
 	sess, err := store.Create()
 	if err != nil {
 		slog.Warn("无法新建会话，本次对话不会落盘", "err", err)
-		return nil, nil
+		return nil, nil, nil, ""
 	}
-	slog.Debug("会话已建立", "id", sess.ID)
-	return store, sess
+	slog.Debug("已新建会话", "id", sess.ID)
+	return store, sess, nil, ""
+}
+
+// resume 尝试续上最近一次会话；没有可续的（或读不出来）时返回 nil。
+func resume(store *session.Store) ([]session.Turn, *session.Session, string) {
+	summary, ok, err := store.Latest()
+	if err != nil {
+		slog.Warn("读取会话列表失败，本次不恢复", "err", err)
+		return nil, nil, ""
+	}
+	if !ok {
+		return nil, nil, ""
+	}
+
+	loaded, err := store.Load(summary.ID)
+	if err != nil {
+		slog.Warn("恢复上次会话失败，改为新建", "id", summary.ID, "err", err)
+		return nil, nil, ""
+	}
+	sess, err := store.Open(summary.ID)
+	if err != nil {
+		slog.Warn("无法重开上次会话，改为新建", "id", summary.ID, "err", err)
+		return nil, nil, ""
+	}
+
+	turns := session.BuildTurns(loaded.Events)
+	slog.Debug("已恢复会话", "id", summary.ID, "turns", len(turns))
+	return turns, sess, fmt.Sprintf("已恢复 %s（%d 轮）", summary.ID, len(turns))
 }
 
 // buildTools 注册全部工具。顺序固定：模型看到 schema 的顺序会影响它的选择倾向。

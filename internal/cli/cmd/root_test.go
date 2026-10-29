@@ -132,7 +132,7 @@ func TestRootCommand_PassesResolvedModelToREPL(t *testing.T) {
 		Version: "0.1.0",
 		Stdout:  &bytes.Buffer{},
 		Stderr:  &bytes.Buffer{},
-		BuildEnv: func() (Env, error) {
+		BuildEnv: func(bool) (Env, error) {
 			return Env{Model: "deepseek-chat"}, nil
 		},
 		StartREPL: func(model string) error {
@@ -157,7 +157,7 @@ func TestRootCommand_ResolveFailureSkipsREPL(t *testing.T) {
 		Version: "0.1.0",
 		Stdout:  &bytes.Buffer{},
 		Stderr:  &bytes.Buffer{},
-		BuildEnv: func() (Env, error) {
+		BuildEnv: func(bool) (Env, error) {
 			return Env{}, errors.New(`缺少密钥：请设置环境变量 OPENAI_API_KEY（供应商 "openai"）`)
 		},
 		StartREPL: func(string) error {
@@ -190,7 +190,7 @@ func TestRootCommand_VersionDoesNotResolveModel(t *testing.T) {
 		Version: "0.1.0",
 		Stdout:  &bytes.Buffer{},
 		Stderr:  &bytes.Buffer{},
-		BuildEnv: func() (Env, error) {
+		BuildEnv: func(bool) (Env, error) {
 			called = true
 			return Env{}, errors.New("不应该被调用")
 		},
@@ -241,5 +241,46 @@ func TestDefaultFlagsAreLocalized(t *testing.T) {
 		if f.Usage != want {
 			t.Errorf("参数 %q 的说明不符：期望 %q，实际 %q", name, want, f.Usage)
 		}
+	}
+}
+
+func TestRootCommand_NewFlagChoosesFreshSession(t *testing.T) {
+	// --new 的唯一作用就是让装配层"不恢复"：这条线断了，用户想开新会话时会发现
+	// 上次的历史又回来了，而且没有别的办法清掉。
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"默认续上次", nil, false},
+		{"--new 新建", []string{"--new"}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got bool
+			called := false
+			root := NewRootCommand(Options{
+				Version: "0.1.0",
+				Stdout:  &bytes.Buffer{},
+				Stderr:  &bytes.Buffer{},
+				BuildEnv: func(newSession bool) (Env, error) {
+					got, called = newSession, true
+					return Env{}, nil
+				},
+				StartREPL: func(string) error { return nil },
+			})
+			root.SetArgs(tc.args)
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("执行失败：%v", err)
+			}
+			if !called {
+				t.Fatal("应调用 BuildEnv")
+			}
+			if got != tc.want {
+				t.Errorf("BuildEnv 收到 newSession=%v，期望 %v", got, tc.want)
+			}
+		})
 	}
 }
