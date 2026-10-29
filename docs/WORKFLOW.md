@@ -43,7 +43,7 @@ Spec ──► Plan ──► Review ──► Task ──► Feedback
 - 人保留**事后复核权**：复核 diff 后若判 `CHANGES REQUESTED`，agent 必须回退该单元，且不得辩解
 - 触及以下任一情况时**预授权自动失效**，必须停下等人明确同意：
   1. 改动既有公开契约（`docs/CODE-DESIGN.md` 里的函数签名、`ARCHITECTURE.md` 里的接口）
-  2. 新增直接依赖
+  2. 新增直接依赖——**例外**：`ARCHITECTURE.md` §7 选型表内的依赖已于 2026-10-29 一次性授权，可直接引入；表外新增仍需停下
   3. 触碰权限、密钥、会话格式（`CODING-STANDARDS.md` §8）
   4. 单元规模超过上限（3 文件 / 300 行）
   5. 连续两次质量门失败且原因不明

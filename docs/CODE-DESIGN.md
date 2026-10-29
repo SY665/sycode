@@ -83,11 +83,15 @@ run() int
 
 | 元素 | 签名 | 职责 |
 |---|---|---|
-| `Options` | `type Options struct { Version string; Stdout, Stderr io.Writer }` | 注入输出，便于测 |
-| `NewRootCommand` | `func NewRootCommand(opts Options) *cobra.Command` | 建 root + `version` + `run` 子命令 |
-| `runREPL` | `func (o Options) runREPL(cmd *cobra.Command, _ []string) error` | 组装依赖并进入 REPL |
-| `newVersionCmd` | `func newVersionCmd(version string) *cobra.Command` | 输出 `0.1.0 (commit)` |
-| `newRunCmd` | `func newRunCmd() *cobra.Command` | headless 单回合（P4 实装，P1 先返回未实现） |
+| `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer }` | 注入版本与输出，便于测 |
+| `NewRootCommand` | `func NewRootCommand(opts Options) *cobra.Command` | 建 root + `version` + `run` 子命令；同时完成汉化 |
+| `runREPL` | `func runREPL(opts Options) error` | 进入交互界面（P1.4 实装，当前返回"尚未实现"） |
+| `newVersionCmd` | `func newVersionCmd(opts Options) *cobra.Command` | 输出 `0.1.0 (build abc1234)` |
+| `newRunCmd` | `func newRunCmd() *cobra.Command` | headless 单回合（P4 实装） |
+| `versionString` | `func versionString(opts Options) string` | 有提交号才带 `(build …)`，避免空括号 |
+| `ExitCode` | `func ExitCode(err error) int` | 取 `exitError.code`；非该类型按 1 |
+| `usageErrorf` / `errNotImplemented` | 内部构造器 | 退出码 2（用法）与 1（未实现）分离 |
+| `localizeDefaultFlags` / `translateFlagError` | 汉化辅助 | cobra 无 i18n，默认 flag 与内置错误都要覆盖 |
 
 `resume.go`：`newResumeCmd(store *session.Store) *cobra.Command` + `pickSession(...)`。
 
