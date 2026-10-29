@@ -5,6 +5,8 @@
 ## [Unreleased]
 
 ### Added
+- `internal/tools/read_file.go`：`read_file` 工具（分段 `offset`/`limit`、16MiB 上限后建议用 grep、二进制探测、32KiB 截断并提示续读）；**给模型的内容不带行号**（避免行号被写进 `old_string`），行号只进 `Display`
+- `internal/tools/input.go` + `permission.go`：参数解析（不裸断言，类型错给中文示例）与权限通道收口（三态 → 文案只此一处，拒绝的文案像决定而不像故障）
 - `internal/tools`：`Tool`/`Validator`/`PermissionRequester` 契约、`Result`（含 `Display` 结构化展示与 `Artifact` 落盘路径）、`Schema`；`Registry`（注册顺序稳定、重名报错、`Schemas` 返回副本）；`clip` 把超长结果截到 32KiB 且不切断多字节字符
 - `internal/filesystem`：`Guard`（权限三态 `Denied/Pending/Granted` + `Reason{Code,Message}`）与 `GitAwareness`（递归载入 `.gitignore`，跳过已忽略目录）。判定顺序 artifact → 系统路径 → 家目录隐藏项 → 工作目录内（`.git` → gitignore → read/write）→ 目录外；`Resolve` 展开 `~`、解析符号链接（含「父目录是链接、目标还不存在」）
 - **REPL 流式渲染**：`repl.Deps` 接入 `agentcore.AgentCore`，正文增量即渲染；重试显示「第 N 次失败，正在重试…」；`Esc` 中断保留已生成内容；流意外结束（无终态）有提示；流式期间拒绝新输入（避免两股回答缠在一起）

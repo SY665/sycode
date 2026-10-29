@@ -257,9 +257,39 @@ type PermissionRequester interface {   // 由 UI 实现，注入给工具
 | `Description` | `func (t *ReadFileTool) Description() string` | 写给模型：何时用、不适用什么 |
 | `InputSchema` | `func (t *ReadFileTool) InputSchema() map[string]any` | 只列 `path`/`offset`/`limit` |
 | `ValidateInput` | `func (t *ReadFileTool) ValidateInput(_ context.Context, in Input) error` | 缺参/类型错 → `参数错误：…`（中文，保留英文字段名） |
-| `Execute` | `func (t *ReadFileTool) Execute(ctx context.Context, in Input) (Result, error)` | 编排：校验 → Check → （询问）→ 读 → 格式化 |
-| `readFileRange` | `func readFileRange(path string, offset, limit int) (content string, total, read int, truncated bool, err error)` | 私有纯逻辑，独立可测 |
-| `isBinary` | `func isBinary(b []byte) bool` | NUL 字节探测 |
+| `Execute` | `func (t *ReadFileTool) Execute(ctx context.Context, in Input) (Result, error)` | 编排：校验 → 询问权限 → **Resolve 成绝对路径** → 读 → 截断 → 组装 |
+| `readFileRange` | `func readFileRange(path string, offset, limit int) (content string, total, read int, truncated bool, err error)` | 私有纯逻辑，独立可测；`offset` 从 1 开始 |
+| `isBinary` | `func isBinary(data []byte) bool` | 前 8KiB 找 NUL：文本里不会有 0x00 |
+| `splitLines` / `numberedLines` | 私有 | 切行保留空行（行号需与编辑器一致）；行号只进 `Display`，不进 `Content` |
+| `humanBytes` | 私有 | 错误提示里的"16.0 MiB"这类可读单位 |
+
+常量：`defaultReadLimit = 2000`、`maxReadLimit = 5000`、`maxReadBytes = 16MiB`、`binaryProbeBytes = 8KiB`。
+
+**两个容易踩的点**：
+
+1. **`Content` 不带行号**。模型要拿原文去 `edit_file` 精确替换；带行号会诱发它把 `   12│ ` 也写进 `old_string`。行号只放在 `Display.Lines` 里给人看。
+2. **读之前必须 `guard.Resolve(path)`**。模型给的相对路径是相对工作目录的，而进程 cwd 未必是工作目录——直接 `os.ReadFile(相对路径)` 会读错文件（实测：测试里 cwd 是包目录，直接读就"文件不存在"）。
+
+### `input.go`（所有工具共用的参数解析）
+
+| 函数 | 签名 | 职责 |
+|---|---|---|
+| `requireString` | `func requireString(in Input, field string) (string, error)` | 缺参/类型错/空串 → `参数错误：…` + 示例 JSON |
+| `optionalInt` | `func optionalInt(in Input, field string, def int) (int, error)` | JSON 数字是 `float64`，三种数值类型都认；`1.5` 拒绝而不是截断 |
+| `optionalString` | `func optionalString(in Input, field string) (string, error)` | 可选字符串 |
+| `typeName` / `exampleFor` | 私有 | 把 Go 类型名换成 `string`/`number` 这类模型看得懂的说法；给常见字段备好示例片段 |
+
+不用裸类型断言：模型给的类型经常不对，`in["path"].(string)` 会 panic，而 `Execute` 永不 panic 是硬约束。
+
+### `permission.go`（工具 → 权限的唯一通道）
+
+| 元素 | 签名 | 职责 |
+|---|---|---|
+| `access` | `type access struct { guard, perm, tool, path, op, detail }` | 一次"要碰某个路径"的请求；用结构体而不是七个位置参数 |
+| `askAccess` | `func askAccess(ctx context.Context, req access) error` | 三态 → 文案的唯一映射点：`Granted` 放行、`Denied` → `权限不足：…（判定依据）`、`Pending` → 问用户，被拒 → `权限不足：用户拒绝了…不要重试同一路径` |
+| `opName` | 私有 | `read/write/exec` → 读取/修改/执行 |
+
+**为什么要收口**：三态到文案的映射散到各工具里，"被拒绝"就会在某些工具里说成"执行失败"，模型会以为是临时故障而反复重试。拒绝的文案必须像"决定"，不像"故障"。
 
 **每个工具必须恰好有这 5 个方法 + 构造器**；不允许加 `BeforeExecute`、`PostHook` 这类钩子（要加就走 ADR）。
 
