@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -410,5 +411,175 @@ func TestStreamClosedWithoutTerminalIsReported(t *testing.T) {
 	}
 	if !strings.Contains(got.render(), "意外结束") {
 		t.Errorf("应提示事件流异常结束：\n%s", got.render())
+	}
+}
+
+// newTestModelWithPermission 造一个带权限通路的模型：弹窗必须有地方作答，否则工具会一直挂着。
+func newTestModelWithPermission(p *agentcore.PermissionPrompt) Model {
+	m := newTestModel()
+	m.deps.Permission = p
+	return m
+}
+
+// askPermission 模拟工具侧发出一次询问，并等界面侧真的收到它。
+// 两边都在 goroutine 里：RequestPermission 会阻塞到有人作答，不能占着测试主线程。
+func askPermission(t *testing.T, p *agentcore.PermissionPrompt, req agentcore.PermissionRequest) <-chan agentcore.Decision {
+	t.Helper()
+	decided := make(chan agentcore.Decision, 1)
+	go func() {
+		d, _ := p.RequestPermission(context.Background(), req)
+		decided <- d
+	}()
+	return decided
+}
+
+func TestPermissionDialogShowsWhatWillHappen(t *testing.T) {
+	p := agentcore.NewPermissionPrompt()
+	m := newTestModelWithPermission(p)
+
+	req := agentcore.PermissionRequest{
+		Tool: "write_file", Op: "write", Path: "src/a.go", Detail: "写入文件内容（覆盖原有内容）",
+	}
+	updated, _ := m.Update(permissionRequestMsg(req))
+	m = updated.(Model)
+
+	view := m.render()
+	for _, want := range []string{"需要你确认", "write_file 想要修改 src/a.go", "覆盖原有内容", "[1] 允许一次", "[2] 本会话总是允许", "[3] 拒绝"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("弹窗缺 %q：\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "› ") {
+		t.Errorf("弹窗期间不该还显示输入框：\n%s", view)
+	}
+}
+
+func TestPermissionDialogSwallowsTyping(t *testing.T) {
+	p := agentcore.NewPermissionPrompt()
+	m := newTestModelWithPermission(p)
+	m.input.InsertString("半截输入")
+
+	req := agentcore.PermissionRequest{Tool: "edit_file", Op: "write", Path: "src/a.go"}
+	updated, _ := m.Update(permissionRequestMsg(req))
+	m = updated.(Model)
+
+	m, _ = press(m, keyRune)
+
+	if got := m.input.Value(); got != "半截输入" {
+		t.Errorf("弹窗期间按键不该落进输入框，实际 %q", got)
+	}
+	if m.pending == nil {
+		t.Error("未作答时弹窗应保持打开")
+	}
+}
+
+func TestPermissionDialogAnswerGoesBackToTool(t *testing.T) {
+	p := agentcore.NewPermissionPrompt()
+	m := newTestModelWithPermission(p)
+
+	req := agentcore.PermissionRequest{Tool: "write_file", Op: "write", Path: "src/a.go"}
+	decided := askPermission(t, p, req)
+
+	// 界面侧的等待者：与 Init 里挂的那条同一条链。
+	msgCh := make(chan tea.Msg, 1)
+	go func() { msgCh <- waitPermission(p)() }()
+	updated, _ := m.Update(<-msgCh)
+	m = updated.(Model)
+
+	m, cmd := press(m, tea.KeyPressMsg{Code: '1', Text: "1"})
+
+	select {
+	case d := <-decided:
+		if d != agentcore.DecisionAllowOnce {
+			t.Fatalf("工具侧应收到 AllowOnce，实际 %v", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时：作答没有送回去")
+	}
+	if m.pending != nil {
+		t.Error("作答后弹窗应关闭")
+	}
+	if !strings.Contains(strings.Join(m.transcript, "\n"), "已允许一次") {
+		t.Errorf("记录里应留一行痕迹：%q", m.transcript)
+	}
+	if cmd == nil {
+		t.Error("作答后应继续等待下一次询问")
+	}
+}
+
+func TestPermissionDialogSessionDecisionNote(t *testing.T) {
+	p := agentcore.NewPermissionPrompt()
+	m := newTestModelWithPermission(p)
+
+	decided := askPermission(t, p, agentcore.PermissionRequest{Tool: "bash", Op: "exec", Path: "."})
+	msgCh := make(chan tea.Msg, 1)
+	go func() { msgCh <- waitPermission(p)() }()
+	updated, _ := m.Update(<-msgCh)
+	m = updated.(Model)
+
+	m, _ = press(m, tea.KeyPressMsg{Code: '2', Text: "2"})
+
+	select {
+	case d := <-decided:
+		if d != agentcore.DecisionAllowSession {
+			t.Fatalf("工具侧应收到 AllowSession，实际 %v", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时：作答没有送回去")
+	}
+	if !strings.Contains(strings.Join(m.transcript, "\n"), "本会话不再询问") {
+		t.Errorf("记录里应说明这是会话级放行：%q", m.transcript)
+	}
+}
+
+func TestPermissionDialogEscDenies(t *testing.T) {
+	p := agentcore.NewPermissionPrompt()
+	m := newTestModelWithPermission(p)
+
+	decided := askPermission(t, p, agentcore.PermissionRequest{Tool: "write_file", Op: "write", Path: "src/a.go"})
+	msgCh := make(chan tea.Msg, 1)
+	go func() { msgCh <- waitPermission(p)() }()
+	updated, _ := m.Update(<-msgCh)
+	m = updated.(Model)
+
+	// Esc 在弹窗里是"拒绝这次"，不是中断整个回合：用户想取消的是这个操作。
+	m, _ = press(m, keyEsc)
+
+	select {
+	case d := <-decided:
+		if d != agentcore.DecisionDeny {
+			t.Fatalf("Esc 应表示拒绝，实际 %v", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时：Esc 没有送回答案")
+	}
+	if m.quitting {
+		t.Error("Esc 不该退出程序")
+	}
+}
+
+func TestPermissionDialogCtrlCLeaves(t *testing.T) {
+	p := agentcore.NewPermissionPrompt()
+	m := newTestModelWithPermission(p)
+
+	decided := askPermission(t, p, agentcore.PermissionRequest{Tool: "write_file", Op: "write", Path: "src/a.go"})
+	msgCh := make(chan tea.Msg, 1)
+	go func() { msgCh <- waitPermission(p)() }()
+	updated, _ := m.Update(<-msgCh)
+	m = updated.(Model)
+
+	// 弹窗里也要能出去，且必须先把拒绝送回去，否则工具侧会一直等。
+	m, cmd := press(m, keyCtrlC)
+
+	if !m.quitting || cmd == nil {
+		t.Fatal("弹窗里 Ctrl+C 应退出")
+	}
+	select {
+	case d := <-decided:
+		if d != agentcore.DecisionDeny {
+			t.Fatalf("退出时工具侧应收到拒绝，实际 %v", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时：退出时没把拒绝送回去")
 	}
 }

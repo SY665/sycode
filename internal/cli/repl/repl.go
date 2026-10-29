@@ -46,6 +46,9 @@ type Deps struct {
 	// Core 是回合引擎；为空时界面只做回显（测试与降级用）。
 	Core agentcore.AgentCore
 
+	// Permission 是权限询问通路；为空时不弹窗（工具侧会因"没有确认通道"而拒绝）。
+	Permission *agentcore.PermissionPrompt
+
 	// Ctx 由 Run 注入，供 Submit 使用；为空时退回 Background。
 	Ctx context.Context
 }
@@ -66,6 +69,9 @@ type Model struct {
 	answer      strings.Builder
 	retryNote   string
 	interrupted bool
+
+	// pending 是正在等用户作答的权限询问；非空即"弹窗模态"，输入暂停。
+	pending *agentcore.PermissionRequest
 }
 
 // NewModel 构造初始状态，不做任何 IO。
@@ -84,8 +90,14 @@ func NewModel(d Deps) Model {
 }
 
 // Init 让输入框获得焦点；Bubble Tea 会在启动后发送窗口尺寸事件。
+//
+// 权限等待只在这里挂一次，之后每次作答再由 answerPermission 续上：
+// 一条链上始终只有一个等待者。
 func (m Model) Init() tea.Cmd {
-	return m.input.Focus()
+	if m.deps.Permission == nil {
+		return m.input.Focus()
+	}
+	return tea.Batch(m.input.Focus(), waitPermission(m.deps.Permission))
 }
 
 // Update 是唯一修改状态的地方。
@@ -97,6 +109,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		// 弹窗是模态的：所有按键先给它，避免用户以为在输入框里打字、实际把回答漏掉。
+		if m.pending != nil {
+			return m.answerPermission(msg)
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			if m.quitArmed {
@@ -130,6 +146,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamClosedMsg:
 		// 没有终态事件就到了尽头：按"流异常结束"提示，但不当成错误弹红字。
 		return m.finishTurn(errStreamClosed)
+
+	case permissionRequestMsg:
+		return m.showPermission(agentcore.PermissionRequest(msg))
 	}
 
 	var cmd tea.Cmd
@@ -263,6 +282,92 @@ func waitEvent(ch <-chan llm.StreamEvent) tea.Cmd {
 // 其它库的消息类型撞车，也不好看清"这是界面自己的消息"。
 type streamEventMsg llm.StreamEvent
 
+// permissionRequestMsg 是"某个工具在等许可"进 Update 的通道。
+type permissionRequestMsg agentcore.PermissionRequest
+
+// waitPermission 把"从权限通路读一个请求"变成一条 tea.Cmd。
+//
+// 与 waitEvent 同一套路：把阻塞读放进框架的 goroutine 里，界面不必轮询。
+func waitPermission(p *agentcore.PermissionPrompt) tea.Cmd {
+	return func() tea.Msg {
+		return permissionRequestMsg(<-p.Requests())
+	}
+}
+
+// showPermission 打开弹窗。
+func (m Model) showPermission(req agentcore.PermissionRequest) (tea.Model, tea.Cmd) {
+	// 先把已生成的正文落进历史：权限记录必须排在它后面。
+	// 否则模型说了"我来改这个文件"、弹窗记录却在它上面，读起来时间顺序是反的。
+	if text := m.answer.String(); text != "" {
+		m.append(text)
+		m.answer.Reset()
+	}
+	m.pending = &req
+	return m, nil
+}
+
+// answerPermission 处理弹窗里的按键。只有这里能把答案送回去。
+//
+// 用数字/字母直答，不做"移动选中项 + 回车"：弹窗是阻塞的，多一层选中态
+// 就多一类状态不一致（答案与高亮不同步），而这三个选项本来一看就能选。
+func (m Model) answerPermission(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "1", "y":
+		return m.respond(agentcore.DecisionAllowOnce)
+	case "2", "a":
+		return m.respond(agentcore.DecisionAllowSession)
+	case "3", "n", "esc":
+		return m.respond(agentcore.DecisionDeny)
+	case "ctrl+c":
+		// 弹窗里也要留一条不靠作答就能出去的路：先拒掉，否则工具侧会一直挂着。
+		m.deps.Permission.Answer(agentcore.DecisionDeny)
+		m.pending = nil
+		m.quitting = true
+		return m, tea.Quit
+	default:
+		// 其余键不响应，也不透给输入框：弹窗期间打字没有意义。
+		return m, nil
+	}
+}
+
+// respond 把决定送回去，记一行留痕，并重新开始等待下一次询问。
+func (m Model) respond(decision agentcore.Decision) (tea.Model, tea.Cmd) {
+	if m.pending != nil {
+		m.append(dimStyle.Render(permissionNote(*m.pending, decision)))
+	}
+	m.deps.Permission.Answer(decision)
+	m.pending = nil
+	return m, waitPermission(m.deps.Permission)
+}
+
+// permissionNote 是作答后留在记录里的一行。
+//
+// 用户回头翻记录时要能看出"这次是被放行的还是被拒的"，否则只看到模型失败会以为出了故障。
+func permissionNote(req agentcore.PermissionRequest, decision agentcore.Decision) string {
+	action := "已拒绝"
+	switch decision {
+	case agentcore.DecisionAllowOnce:
+		action = "已允许一次"
+	case agentcore.DecisionAllowSession:
+		action = "本会话不再询问"
+	}
+	return "· " + action + "：" + req.Tool + " " + opText(req.Op) + " " + req.Path
+}
+
+// opText 把操作名换成中文动词。取值同 filesystem.Op。
+func opText(op string) string {
+	switch op {
+	case "read":
+		return "读取"
+	case "write":
+		return "修改"
+	case "exec":
+		return "执行"
+	default:
+		return op
+	}
+}
+
 // streamClosedMsg 表示"channel 关了但没给终态事件"（实现有问题时才会出现）。
 type streamClosedMsg struct{}
 
@@ -313,10 +418,30 @@ func (m Model) render() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(m.input.View())
+	if m.pending != nil {
+		b.WriteString(m.renderPermission())
+	} else {
+		b.WriteString(m.input.View())
+	}
 	if m.quitArmed {
 		b.WriteString("\n" + dimStyle.Render(quitHint))
 	}
+	return b.String()
+}
+
+// renderPermission 画权限弹窗，占用输入框的位置：作答期间不接受输入。
+func (m Model) renderPermission() string {
+	req := *m.pending
+
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("需要你确认"))
+	b.WriteString("\n")
+	b.WriteString(req.Tool + " 想要" + opText(req.Op) + " " + req.Path)
+	if req.Detail != "" {
+		b.WriteString("\n" + dimStyle.Render(req.Detail))
+	}
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("[1] 允许一次   [2] 本会话总是允许   [3] 拒绝"))
 	return b.String()
 }
 

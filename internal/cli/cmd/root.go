@@ -24,6 +24,9 @@ type Env struct {
 	Model string
 	// Core 是界面用的回合引擎；为空时界面只回显（测试可省）。
 	Core agentcore.AgentCore
+	// Permission 是权限询问通路：工具侧往里放请求，界面侧取出来弹窗。
+	// 两侧拿的是同一个对象，因此它既不属于 Core 也不属于界面，由这里一并转交。
+	Permission *agentcore.PermissionPrompt
 }
 
 // Options 注入进程级依赖。输出目标可替换，便于测试断言终端文案。
@@ -113,9 +116,10 @@ func runREPL(opts Options) error {
 		return opts.StartREPL(env.Model)
 	}
 	return repl.Run(context.Background(), repl.Deps{
-		Version: versionString(opts),
-		Model:   env.Model,
-		Core:    env.Core,
+		Version:    versionString(opts),
+		Model:      env.Model,
+		Core:       env.Core,
+		Permission: env.Permission,
 	})
 }
 

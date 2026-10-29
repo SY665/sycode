@@ -91,7 +91,7 @@ run() int
 
 | 元素 | 签名 | 职责 |
 |---|---|---|
-| `Env` | `type Env struct { Model string; Core agentcore.AgentCore }` | 进入界面前要准备好的东西：标题用的模型名 + 回合引擎 |
+| `Env` | `type Env struct { Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt }` | 进入界面前要准备好的东西：标题用的模型名、回合引擎、权限通路（同一对象也交给了工具，界面只是取用） |
 | `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer; BuildEnv func() (Env, error); StartREPL func(model string) error }` | 注入版本、输出与环境构造函数；后两项是测试替换点 |
 | `NewRootCommand` | `func NewRootCommand(opts Options) *cobra.Command` | 建 root + `version` + `run` 子命令；同时完成汉化 |
 | `runREPL` | `func runREPL(opts Options) error` | 先准备环境（失败则不进界面、退出 1），再把模型名与引擎交给界面 |
@@ -577,11 +577,26 @@ type AgentCore interface {
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `SetupTools` | `func SetupTools(deps ToolDeps) *tools.Registry` | 注册 6 个工具，顺序固定 |
-| `permissionAdapter` | `type permissionAdapter struct { core AgentCore }` | `RequestPermission` → 调 UI |
-| `diffAdapter` | `type diffAdapter struct { core AgentCore }` | `EmitDiff` → 推 UI |
+| `SetupTools` | `func SetupTools(deps ToolDeps) *tools.Registry` | 注册 6 个工具，顺序固定（当前在 `cmd/main.go` 的 `buildTools`） |
+| `diffAdapter` | `type diffAdapter struct { core AgentCore }` | `EmitDiff` → 推 UI（P3.7b 起用） |
 
-`types.go`：`Mode`、`PermissionRequest`、`Decision` 等跨层类型。
+`permission.go`（P3.7）：工具与界面之间的权限通路。
+
+| 元素 | 签名 | 职责 |
+|---|---|---|
+| `PermissionPrompt` | `type PermissionPrompt struct` | 工具侧阻塞地问、界面侧异步地答；持有"本会话总是允许"的缓存 |
+| `NewPermissionPrompt` | `func NewPermissionPrompt() *PermissionPrompt` | 建通路，不做 IO、不起 goroutine |
+| `RequestPermission` | `func (p *PermissionPrompt) RequestPermission(ctx context.Context, req PermissionRequest) (Decision, error)` | 实现 `tools.PermissionRequester`；ctx 取消时返回 Deny **加错误**，好把"没等到答复"与"用户拒绝"分开 |
+| `Requests` / `Answer` | `func (p *PermissionPrompt) Requests() <-chan PermissionRequest`、`func (p *PermissionPrompt) Answer(Decision) bool` | 界面侧的一读一答；同一时刻只有一条询问在路上，回答完再回来等下一个 |
+| `sessionKey` | `func sessionKey(req PermissionRequest) string` | 缓存键 `tool\|op\|目录`：同目录的同类操作只问一次（exec 的路径固定是 `.`，等于"本会话允许执行"） |
+| `PermissionRequest` / `Decision` | 类型别名 → `tools` 同名类型 | 界面不必 import `tools`，也不产生第二套同构类型 |
+
+> **为什么不是给 `AgentCore` 加 `RequestPermission`**：`agentcore.Core` 只是转发给 `appstate`，
+> 它没法把问题送回界面——那要求它反向持有 UI，而 main 又必须先建 Core 再建界面，接线成环。
+> 通路对象在 `main.buildEnv` 里建，两侧各拿一份引用（工具侧经 `perm`，界面侧经 `cmd.Env`）：
+> `AgentCore` 的契约不变，装配顺序也不再重要。
+
+`types.go`：`Mode` 等跨层类型（`PermissionRequest`/`Decision` 已确定复用 `tools` 的别名，见上）。
 
 ## 9. UI 层 `internal/cli/repl/`
 
@@ -589,7 +604,7 @@ type AgentCore interface {
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Deps` | `type Deps struct { Version, Model string; Core agentcore.AgentCore; Ctx context.Context }`（P2 已加 `Core`/`Ctx`；`Store` 待 P4） | 界面只拿展示与回合引擎，不碰 `llm.Client` |
+| `Deps` | `type Deps struct { Version, Model string; Core agentcore.AgentCore; Permission *agentcore.PermissionPrompt; Ctx context.Context }`（P3.7 加 `Permission`；`Store` 待 P4） | 界面只拿展示、回合引擎与权限通路，不碰 `llm.Client` |
 | `submit` | `func (m Model) submit() (tea.Model, tea.Cmd)` | `/exit` 退出；调 `Core.Submit`，成功后进入流式状态并返回 `waitEvent` |
 | `handleStreamEvent` | `func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd)` | 正文累积、`EventRetry` 提示、终态收尾；其余事件 P2 不展示 |
 | `finishTurn` | `func (m Model) finishTurn(err error)` | 正文落历史 → 中断提示 → 错误提示；清流式状态 |
@@ -603,6 +618,11 @@ type AgentCore interface {
 | `Run` | `func Run(ctx context.Context, d Deps) error` | 非 TTY 直接返回中文错误；否则建 `tea.Program` 并阻塞 |
 | `isInteractive` | `func isInteractive(f *os.File) bool` | 字符设备 **且** 不是空设备（`os.SameFile` 排除 `/dev/null`、`NUL`） |
 | `waitEvent` | `func waitEvent(ch <-chan llm.StreamEvent) tea.Cmd` | **channel → tea.Msg 的桥**，UI 与 agent 解耦的关键 |
+| `waitPermission` | `func waitPermission(p *agentcore.PermissionPrompt) tea.Cmd` | 同上，把"读一条权限询问"变成 cmd；`Init` 挂一次，每次作答后续上一条，链上只有一个等待者 |
+| `showPermission` | `func (m Model) showPermission(req agentcore.PermissionRequest) (tea.Model, tea.Cmd)` | 打开弹窗；**先把已生成正文落进历史**，否则权限记录会排在模型那句话上面 |
+| `answerPermission` | `func (m Model) answerPermission(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)` | `1/y` 允许一次、`2/a` 本会话总是允许、`3/n/Esc` 拒绝、`Ctrl+C` 拒绝并退出；其它键不响应（弹窗是模态的） |
+| `respond` / `permissionNote` | `func (m Model) respond(decision agentcore.Decision) (tea.Model, tea.Cmd)`、`func permissionNote(req, decision) string` | 送回答案、记一行留痕（"已允许一次 / 本会话不再询问 / 已拒绝"）、重新等待下一次 |
+| `renderPermission` / `opText` | `func (m Model) renderPermission() string`、`func opText(op string) string` | 弹窗占用输入框位置：工具名 + 中文动词 + 路径 + Detail + 三个选项 |
 
 子包各自的入口（只列一个代表函数，避免过度规定）：
 
@@ -611,7 +631,7 @@ type AgentCore interface {
 | `stream` | `func Render(ev llm.StreamEvent, st *State) []Segment` |
 | `output` | `func (o *Output) Push(s Segment)`、`func (o *Output) Render(width int) string` |
 | `markdown` | `func Render(src string, width int, th theme.Theme) string` |
-| `permissions` | `func (p *Prompt) Request(req agentcore.PermissionRequest) tea.Cmd` |
+| `permissions` | 暂未单独成包：弹窗状态只有 `Model.pending` 一个字段，拆包要多一层转发；功能长大（选择器、批量授权）时再按常见实现拆出 `requester.go`/`selector.go` |
 | `widgets` | 每个组件 `NewXxx(...) Model` + `Update` + `View` |
 | `commands` | `func Register(c Command)`、`func Lookup(name string) (Command, bool)` |
 

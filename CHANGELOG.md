@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **权限弹窗**（P3.7a）：`agentcore.PermissionPrompt` 是工具与界面之间的双向通路（工具侧阻塞问、界面侧一读一答），带「本会话总是允许」缓存（键 `tool|op|目录`）；`repl` 弹窗三项「允许一次 / 本会话总是允许 / 拒绝」，`1·2·3` 或 `y·a·n·Esc` 直答，`Ctrl+C` 拒绝并退出；弹窗期间按键不进输入框，作答后在记录里留一行痕迹。**装配修正**：此前 6 个工具拿到的都是 `nil` perm（只读模式），现在由 `main.buildTools` 真正传入通路
 - `internal/appstate`：回合状态与**唯一的工具循环**（ADR-001）。请求 → 读事件 → 有工具就执行并回灌 → 再请求；25 轮上限、连续 3 次失败追加换做法提示；工具失败也回灌给模型；`EventToolResult` 让界面看到调用结果
 - `internal/agentcore`：`New` 装配 `appstate`（取代 P2 的 `Direct`，已删除）；`main.buildEnv` 装配 `filesystem.Guard` 与 6 个工具并注册
 - `llm.StreamEvent` 新增 `EventToolResult`：区分「模型要调什么」与「执行得到什么」

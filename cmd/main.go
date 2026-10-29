@@ -138,37 +138,42 @@ func buildEnv() (cmd.Env, error) {
 	}
 	guard := filesystem.NewGuard(workDir, git)
 
-	writeRegistry, err := buildTools(guard)
+	// 权限通路两侧共用同一个对象：工具侧（经 perm）放请求，界面侧（经 Env）取出来弹窗。
+	// 它不能挂在 Core 上——那样引擎得反过来持有界面，装配顺序会成环。
+	perm := agentcore.NewPermissionPrompt()
+
+	writeRegistry, err := buildTools(guard, perm)
 	if err != nil {
 		return cmd.Env{}, err
 	}
 
-	// perm 传 nil：P3 还没有权限弹窗，写与执行类操作会被拒绝并说明原因（只读模式）。
-	// 这是安全的默认值——没有界面点头，就不该改用户的东西。
 	return cmd.Env{
-		Model: resolved.ModelID,
-		Core: agentcore.New(client, writeRegistry, guard, nil,
-			llm.Build(promptEnv(resolved.ModelID, workDir))),
+		Model:      resolved.ModelID,
+		Core:       agentcore.New(client, writeRegistry, guard, perm, llm.Build(promptEnv(resolved.ModelID, workDir))),
+		Permission: perm,
 	}, nil
 }
 
 // buildTools 注册全部工具。顺序固定：模型看到 schema 的顺序会影响它的选择倾向。
-func buildTools(guard *filesystem.Guard) (*tools.Registry, error) {
+//
+// perm 必须传给每个工具：真正弹窗的是工具里的 askAccess，而不是回合循环。
+// 传 nil 等于只读模式——写与执行会被拒绝并说明原因。
+func buildTools(guard *filesystem.Guard, perm tools.PermissionRequester) (*tools.Registry, error) {
 	registry := tools.NewRegistry()
 
 	// bash 可能装不上（机器上没有可用 shell）。那种情况下其余工具照常可用，
 	// 不该因为一条命令跑不了就让整个程序起不来。
-	bash, err := tools.NewBashTool(guard, nil)
+	bash, err := tools.NewBashTool(guard, perm)
 	if err != nil {
 		slog.Warn("bash 工具不可用，其余工具不受影响", "err", err)
 	}
 
 	available := []tools.Tool{
-		tools.NewReadFileTool(guard, nil),
-		tools.NewGlobTool(guard, nil),
-		tools.NewGrepTool(guard, nil),
-		tools.NewWriteFileTool(guard, nil),
-		tools.NewEditFileTool(guard, nil),
+		tools.NewReadFileTool(guard, perm),
+		tools.NewGlobTool(guard, perm),
+		tools.NewGrepTool(guard, perm),
+		tools.NewWriteFileTool(guard, perm),
+		tools.NewEditFileTool(guard, perm),
 	}
 	if bash != nil {
 		available = append(available, bash)

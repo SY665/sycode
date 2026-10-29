@@ -55,7 +55,7 @@
                  └───────────────────┘
 ```
 
-**分层与常见实现一致**：`cli/repl → agentcore → appstate → {llm, tools, session, config}`。`agentcore` 只做两件事：定义 UI 依赖的 `AgentCore` 接口、把工具注册表与权限询问器装配起来；`appstate` 才是状态与回合逻辑。
+**分层与常见实现一致**：`cli/repl → agentcore → appstate → {llm, tools, session, config}`。`agentcore` 只做三件事：定义 UI 依赖的 `AgentCore` 接口、把工具注册表与权限询问器装配起来、提供工具与界面之间的权限通路（`PermissionPrompt`）；`appstate` 才是状态与回合逻辑。
 
 **与常见实现唯一的内部差异**：工具循环集中在 `appstate` 一处。常见实现把循环复制到每个 provider 客户端（anthropic/openai/openai_responses/openai_codex/genkit/bedrock 各一份 `executeTools`），我们让 provider 只负责"一次请求 → 一串事件"，循环、权限询问、轮次上限、上下文记账都在 `appstate`。见 ADR-001。
 
@@ -262,7 +262,7 @@ type Event struct {
 2. session 追加 user_message
 3. agentcore.Submit ──► appstate 组装 Request（系统提示 + 历史投影 + 工具 schema）
 4. llm.Client.StreamChat ──► 流式解析 ──► StreamEvent
-5. appstate 消费事件：文本 → 经 agentcore 转 UI；tool_start → Guard 检查 → 需要则发权限询问
+5. appstate 消费事件：文本 → 经 agentcore 转 UI；tool_start → Guard 检查 → 需要则经 `agentcore.PermissionPrompt` 双向通道请界面弹窗作答
 6. 工具执行 → 结果追加为 tool 消息 → 回到第 4 步（上限 25 轮，防死循环）
 7. 终态：session 追加 assistant_turn（含 transcript 片段），UI 收尾
 ```

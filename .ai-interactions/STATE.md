@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 22:20 | 阶段：**P3** | 当前单元：3.6 已完成，下一单元 3.7（权限弹窗）
+更新时间：2026-10-29 21:10 | 阶段：**P3** | 当前单元：3.7a 已完成，下一单元 3.7b（展示渲染）
 
 ## 已完成（本阶段）
 
@@ -75,30 +75,45 @@
   - 新增 `llm.EventToolResult`（appstate 发）；删除 P2 的 `agentcore.Direct`，`repl` 一行未改
   - `main.buildTools` 注册 6 个工具（bash 装不上时跳过并告警）；二进制冒烟 `工具已注册 count=6`
   - **`perm` 目前为 nil → 只读模式**（写/执行被拒并说明原因），3.7 接弹窗
-- 代码 10,799 行（源码 5,513 / 测试 5,286），28 笔提交；直接依赖 7 个
-- 记录：`output-1..6_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 3.7a 已收口（`agentcore/permission.go` 140 + 测试 264；`repl.go` +129、测试 +171）：
+  - **权限通路独立于 `AgentCore`**：给接口加 `RequestPermission` 要求 `Core` 反向持有界面，
+    而 main 必须先建 Core 再建界面 → 成环。改为 `agentcore.PermissionPrompt`（工具侧阻塞问、
+    界面侧一读一答），由 `cmd.Env` 一并转交两侧；**接口契约一行未改**
+  - 通路同时是**会话缓存**：键 `tool|op|目录`（`DecisionAllowSession` 跟着通路走，repl 重建不丢）
+  - ctx 取消返回 **Deny + 错误**（与"用户明确拒绝"区分，回给模型的文案不同）；并发询问快速失败
+  - `repl` 弹窗：`1/y` 允许一次、`2/a` 本会话总是允许、`3/n/Esc` 拒绝、`Ctrl+C` 拒绝并退出；
+    弹窗期间按键不进输入框；`showPermission` **先 flush 正文**再记权限记录（否则顺序反了）
+  - **装配修正（真 bug）**：`buildTools` 此前给 6 个工具全传 `nil` —— "只读模式"不是设计选择而是接线漏了。
+    现在 `buildTools(guard, perm)` 真传通路；`TestWriteToolAsksThenWrites` 用真 write_file + 真 Guard
+    验"允许后落盘、拒绝后零副作用"
+- 代码 11,508 行（源码 5,787 / 测试 5,721），29 笔提交；直接依赖 7 个
+- 记录：`output-1..7_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P3 单元 3.7 —— 权限弹窗**（`repl` + `agentcore` 的 adapter）：
+**P3 单元 3.7b —— 展示渲染**（只动 `repl`，不碰契约，可预授权直接开工）：
 
-1. `agentcore`：`permissionAdapter` 实现 `tools.PermissionRequester`，把请求转给 `AgentCore` 上的新方法
-   （`RequestPermission(ctx, req) (Decision, error)`）—— 接口要加一个方法，`repl` 实现它
-2. `repl`：弹窗状态（`pendingPermission *tools.PermissionRequest`），三个选项
-   「允许一次 / 本会话总是允许 / 拒绝」，用数字键或 ←→+Enter；答案通过 channel 回给 adapter
-3. **会话语义**：`DecisionAllowSession` 的缓存放 adapter（按 `tool+op+path` 前缀），不要放 repl ——
-   repl 重建时缓存不该丢
-4. `Display` 渲染：`DisplayDiff` 用绿/红行、`DisplayList` 用缩进列表；工具结果行（`EventToolResult`）
-   在流式正文之间插入一行 `⎿ read_file 完成（42 B）`
-5. `main.buildEnv` 把 `perm` 换成 adapter（不再传 nil）
-6. 验收：模型要写文件 → 弹窗 → 允许后真的落盘；拒绝后零副作用且模型收到"用户拒绝了"
+1. `EventToolResult` 在正文之间插一行摘要：`⎿ read_file 完成（42 B）` / `⎿ bash 失败：退出码 1`。
+   事件里已有 `Text`（`appstate.summarizeResult` 产出），界面缺的只是渲染
+2. `DisplayDiff`：`+` 绿、`-` 红、`@@` 与其余行暗色。目前 `write_file`/`edit_file` 的 `Display`
+   没有任何消费方；事件流里还没有 `Display` 通道，**需要先决定**：`EventToolResult` 加
+   `Display *tools.Display`（改 llm 的事件结构 = 契约，得先问），或在 `tools.Result` 之外另发一条
+3. `DisplayList`：缩进列表（`glob` 的文件名、`grep` 的 `路径:行号: 内容`）
+4. 长路径 / 长行：弹窗与列表按窗口宽换行或截断（`lipgloss.Width`），窄窗口不撑破布局
+5. 验收：模型改一个文件 → 屏幕上有彩色 diff；grep 结果有缩进；工具结果行夹在正文之间
 
-**先想清楚**：`AgentCore` 加方法等于改接口契约（`repl` 必须一起改）。这属于预授权例外第 1 条，
-**开工前要问一次人**（见 `HANDOFF.md` §9）；同意后同步 `ARCHITECTURE.md` §4 的接口定义（§8 是 ADR，别翻错）。
+**别顺手做**：`EventToolStart` 不渲染。那只是模型的调用快照，与 `EventToolResult` 会重复；
+等 2 的通道定了再一起考虑。
+
+**先想清楚**：第 2 条的"`Display` 怎么进界面"要么改 `llm.StreamEvent`（例外第 1 条，得问人），
+要么让 `appstate` 把 `Display` 压成文本塞进 `EventToolResult.Text`（不改契约，但丢结构化信息）。
+这一条开工前要问。
 
 ## 已知坑 / 需要绕过的东西
 
 - 工具 shell 的 PATH 被裁剪：`go` 不可见 → 先 `source scripts/env.sh`（不是没装）
+- **`tools.NewXxx(guard, nil)` 静默降级成只读模式**：不报错、测试也过，只是写与执行一律被拒。
+  改装配层后要看一眼每个构造点（3.7a 修的就是这个）；`TestWriteToolAsksThenWrites` 专盯这条
 - `bash -c` 下写文档脚本时，正文里出现 `Power`+`Shell` 字面量会被安全策略拦；用 `Write` 落一个 .py 再 `python x.py`
 - `go build ./...` 会把 main 包二进制写到当前目录 → `scripts/check.sh` 已改成 `-o <临时目录>/`
 - `-race` 需要 cgo + gcc：`/d/mingw64/bin` 进 PATH 后 `CGO_ENABLED=1`；否则脚本跳过并提示
