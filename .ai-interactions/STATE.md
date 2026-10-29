@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 18:35 | 阶段：**P1 收尾** | 当前单元：**1.4 已完成**，下一单元 1.5（依赖方向断言）
+更新时间：2026-10-29 18:42 | 阶段：**P1 完成** | 当前单元：无，下一阶段 **P2（模型接入）**
 
 ## 已完成（本阶段）
 
@@ -15,20 +15,20 @@
 
 - 单元 1.1 已收口：`internal/logging`（114 行 + 140 行测试）+ `run()` 接线
 - 单元 1.3 已收口：`internal/cli/cmd/root.go` + `main.go` 退出码映射；引入 cobra
-- 单元 1.4 已收口：`internal/cli/repl`（200 行 + 180 行测试）；引入 bubbletea/bubbles/lipgloss v2
+- 单元 1.4 已收口：`internal/cli/repl`（212 行 + 184 行测试）；引入 bubbletea/bubbles/lipgloss v2
+- 单元 1.5 已收口：`internal/cli/cmd/deps_test.go`（123 行），已用注入违规反证有效性
 - 记录：`output-2/3/4_impl-*.md`
 
 ## 下一步第一件事（具体到文件与函数）
 
 计划已批后，按 `outputs/phase-1/output-1_plan-unit-1-1.md` 执行：
 
-**单元 1.5 —— 依赖方向断言**（`internal/cli/cmd/deps_test.go`，1 个文件）：
+**P2 第一篇 —— `internal/providers` + `internal/config`**（先做"能读到模型与密钥"，不做请求）：
 
-1. 用 `go list -json ./...` 读每个包的 import，断言禁止边：
-   `llm → cli/agentcore/appstate`、`tools → llm`、`filesystem → 任意内部包`、`session → llm`、`appstate → cli`
-2. 验收：临时在 `tools` 里写一行 `import ".../internal/llm"`，测试必须失败
-
-P1 之后进入 P2（模型接入），详见 `docs/ROADMAP.md`。
+1. `internal/providers/registry.go` + 内嵌 `registry.yaml`：`Load`/`Find`/`Default`（见 CODE-DESIGN §3）
+2. `internal/config`：`Load`/`Resolve`/`ResolveKey`/`DefaultPath`；密钥只从环境变量或 `~/.sycode/configs.json` 取
+3. 验收：`sycode` 启动时能打出"已解析到 provider/model"，缺 key 时给出中文可操作错误（退出码 2）
+4. 依赖：`gopkg.in/yaml.v3`（**表外**，需人批准，或改用 JSON 以避免新依赖）
 
 ## 已知坑 / 需要绕过的东西
 

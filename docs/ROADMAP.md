@@ -38,10 +38,12 @@
 | 1.2 | `internal/logging`：slog + 文件命名 + `SYCODE_LOG_LEVEL` | ✅ debug 级别写出 `~/.sycode/logs/sycode-<ts>.log`（JSON） |
 | 1.3 | `internal/cli/cmd`：cobra root + `version` + `run` 占位 + 全中文帮助 | ✅ `sycode run "hi"` 返回未实现错误，退出码 1；`bogu` 退出码 2 |
 | 1.4 | `internal/cli/repl`：bubbletea 最小程序（textarea + 退出） | ✅ `Ctrl+C` 两次退出、`/exit` 退出；非 TTY 友好报错不挂死 |
-| 1.5 | `internal/cli/cmd/deps_test.go`：依赖方向断言 | 人为引入 `tools→llm` 时测试失败 |
+| 1.5 | `internal/cli/cmd/deps_test.go`：依赖方向断言 | ✅ 注入 `logging→cli/repl` 时测试失败，撤回后恢复 |
 | 1.6 | CI：三平台 `fmt/vet/test/race` | ✅ 工作流已就位（待推送后首次验证） |
 
 **退出条件**：P1 全部勾选；`go test -race ./...` 无数据竞争。
+
+> 状态（2026-10-29）：**P1 已完成**，代码 1,214 行（含测试），`bash scripts/check.sh` 全绿。
 
 ---
 
