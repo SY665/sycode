@@ -440,3 +440,51 @@ func TestResolveSymlinkKeepsMissingTail(t *testing.T) {
 		t.Errorf("应把未存在部分接在解析后的父目录上：期望 %q，实际 %q", want, got)
 	}
 }
+
+// TestNewGuardResolvesWorkDir 复现 CI 上的失败：工作目录一边解析、比较另一边不解析。
+//
+// 用替换 evalSymlinks 的方式模拟 macOS（`/var` → `/private/var`）与 Windows（8.3 短名）：
+// 这两种平台上"传进来的工作目录"与"Resolve 的出口"形态不同，修复前会被判成"工作目录外"。
+func TestNewGuardResolvesWorkDir(t *testing.T) {
+	base := t.TempDir()
+	old := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		if strings.HasPrefix(path, base) {
+			return "/private" + path, nil
+		}
+		return old(path)
+	}
+	defer func() { evalSymlinks = old }()
+
+	guard := NewGuard(filepath.Join(base, "work"), nil)
+
+	_, reason := guard.Check(filepath.Join(base, "work", "a.txt"), OpWrite)
+	if reason.Code != ReasonInWorkdir {
+		t.Errorf("工作目录内的写应判为 %q，实际 %q（%s）——工作目录没有和 Resolve 走同一次解析",
+			ReasonInWorkdir, reason.Code, reason.Message)
+	}
+}
+
+// TestNewGuardResolvesSymlinkedWorkDir 用真符号链接再验一次。
+//
+// Windows 默认不允许普通用户建链接（需要特权），那种情况跳过；CI 的 macOS/Linux 会真跑，
+// 而这正是当初把"工作目录在链接之下"漏掉的地方。
+func TestNewGuardResolvesSymlinkedWorkDir(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatalf("建目录失败：%v", err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("当前平台不允许建符号链接（%v）", err)
+	}
+
+	// 从链接进去启动：工作目录是 link，但所有文件路径都会解析成 real 之下。
+	guard := NewGuard(link, nil)
+
+	_, reason := guard.Check(filepath.Join(real, "a.txt"), OpWrite)
+	if reason.Code != ReasonInWorkdir {
+		t.Errorf("链接之下的工作目录应视为目录内，实际 %q（%s）", reason.Code, reason.Message)
+	}
+}

@@ -80,17 +80,24 @@ type Guard struct {
 //
 // 不返回 error：构造失败（如工作目录取不到绝对路径）退化为"工作目录为空"，
 // 此时所有路径都按"工作目录外"处理——宁可多问一次，也不放行。
+//
+// 三个目录都要**解析符号链接**再存，与 `Resolve` 的出口保持同一形态。
+// 否则自己的工作目录会被判成"工作目录外"：
+//   - macOS 的临时目录是 `/var/...`，EvalSymlinks 后变成 `/private/var/...`；
+//   - Windows 的 `C:\Users\RUNNER~1\...`（8.3 短名）解析后变成长名。
+//
+// 两边一边解析一边不解析，比较就永远不相等；这个 bug 在 Linux 上看不出来（`/tmp` 通常不是链接）。
 func NewGuard(workingDir string, git *GitAwareness) *Guard {
 	guard := &Guard{
-		workDir: absClean(workingDir),
+		workDir: resolveSymlinks(absClean(workingDir)),
 		blocked: defaultBlockedPaths(),
 		git:     git,
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		guard.homeDir = absClean(home)
+		guard.homeDir = resolveSymlinks(absClean(home))
 	}
 	if dir, err := BashOutputDir(); err == nil {
-		guard.artifactDir = absClean(dir)
+		guard.artifactDir = resolveSymlinks(absClean(dir))
 	}
 	return guard
 }
