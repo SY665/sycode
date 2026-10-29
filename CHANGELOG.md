@@ -5,6 +5,8 @@
 ## [Unreleased]
 
 ### Added
+- `internal/llm/openai.go`：OpenAI 兼容流式客户端（`openai/openai-go/v3`）。`NewOpenAI` 只校验、关掉 SDK 自带重试；`StreamChat` 返回由发送方关闭的事件 channel，HTTP 错误也走事件流；分片工具调用按 `index` 归并（`tool_start` 发快照、`tool_end` 发完整参数）；**截断识别**——没收到 `finish_reason`/`usage` 就结束时报错，不把半句话当完整回答
+- `internal/llm/errors.go`：`Translate` 把供应商/网络英文错误翻成中文（取消/超时/HTTP 状态/连接失败各有文案），`httpStatusError` 按状态码给"下一步该干什么"并用 `Unwrap` 保住错误链；已翻译的错误不二次包装
 - `internal/llm`：`Client` 契约、`Request`/`Message`/`Role`/`ToolCall`/`ToolSchema`、`StreamEvent`（8 类事件 + `IsTerminal`）、三个事件构造器；`systemprompt.Build` 按 身份 → 环境 → `AGENTS.md` 拼装（`Current shell:` 按 ADR-006 原样，8KiB 截断且不切断多字节字符）
 - **启动接线**：`run()` 经 `resolveModel` 串起注册表 → 配置 → 合并 → 密钥校验；解析成功把模型名交给界面标题，`slog.Debug` 只记 provider/model/base_url；解析失败（缺密钥、配置写坏、模型与供应商不匹配）不进入界面、退出码 1 并给出可操作文案；`--version` / `--help` 不依赖密钥
 - `internal/config`：`configs.json` 加载（缺文件不报错）、三级优先级合并（参数 > 配置 > 注册表）、密钥按环境变量名解析且不回显

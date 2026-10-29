@@ -28,7 +28,7 @@ var forbiddenEdges = []rule{
 	{"internal/llm", "internal/cli", "provider 不认识 UI"},
 	{"internal/llm", "internal/agentcore", "provider 不认识边界层"},
 	{"internal/llm", "internal/appstate", "provider 不认识回合状态机"},
-	{"internal/tools", "internal/llm", "工具不认识模型；schema 转换在 llm 侧"},
+	{"internal/tools", "internal/llm", "工具不认识模型；llm 有自有的 ToolSchema，转换在 appstate"},
 	{"internal/session", "internal/llm", "会话只存 json.RawMessage 与基础类型"},
 	{"internal/appstate", "internal/cli", "状态机不认识 TUI"},
 	{"internal/filesystem", "internal/", "基础设施包不依赖任何内部包"},

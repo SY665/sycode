@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 18:55 | 阶段：**P2** | 当前单元：2.4 已完成，下一单元 2.5（`internal/llm/openai.go` SSE）
+更新时间：2026-10-29 19:35 | 阶段：**P2** | 当前单元：2.5 已完成，下一单元 2.6（重试与错误分类）
 
 ## 已完成（本阶段）
 
@@ -27,24 +27,30 @@
   - 事件：8 类 + `IsTerminal`；`newEvent(eventOpt…)`/`errEvent(nil 兜底)`/`doneEvent(usage 可为 nil)`
   - 系统提示中文，段序 身份 → 环境 → `AGENTS.md`；`Current shell:` 保留 ADR-006 原文；8KiB 截断用 `truncateUTF8` 不切汉字
   - **工具约定段故意不写**（P2 无工具，写了会诱发幻觉调用），P3 补
-- 代码 2,671 行（源码 1,321 / 测试 1,350），16 笔提交
-- 记录：`output-2/3/4_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 2.5 已收口（`openai.go` 337 + `errors.go` 106，测试 408 + 110）：基于已批准的 `openai/openai-go/v3`
+  - **不自己写 parseSSE**：SDK 的 `packages/ssestream` 负责解码（CODE-DESIGN 已删 `parseSSE`）
+  - **截断识别**：`stream.Err()` 不报"半截断开"（实测 nil），改为"收到非空 `finish_reason` 或 `usage` 才算正常结束"
+  - `NewOpenAI` 显式传 key + 关 SDK 重试（防环境变量偷盖配置、防重试次数翻倍且 UI 不可见）
+  - 分片工具调用按 `index` 归并；`tool_start` 发快照，`tool_end` 发完整参数
+  - `Translate`：已翻译→取消→超时→`*oai.Error`→`*url.Error`→兜底；`httpStatusError` 按状态码给动作指引
+- 代码 3,632 行（源码 1,764 / 测试 1,868），17 笔提交；直接依赖 6 个（cobra/bubbletea/bubbles/lipgloss/yaml.v3/openai-go）
+- 记录：`output-2/3/4/5_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P2 单元 2.5 —— `internal/llm/openai.go` SSE 流式解析 + `errors.go`**（2–3 个文件）：
+**P2 单元 2.6 —— 重试与错误分类**（`internal/llm/retry.go` + `estimate.go`，2 个文件）：
 
-1. `OpenAIConfig{BaseURL, APIKey, Model}` + `NewOpenAI(cfg) (*OpenAI, error)`：只校验（baseURL 可解析、model 非空），**不发请求**
-2. `StreamChat(ctx, req)`：起 goroutine，返回只读 channel；发送方关闭；`EventDone`/`EventError` 必为最后一个
-3. `parseSSE(ctx, r io.Reader, out chan<- StreamEvent) error`：`data:` 分片、跨行块、`[DONE]`、`event:` 行忽略
-4. `toOpenAIMessages` / `toOpenAITools`：纯转换，单测直接比结构
-5. `errors.go`：`Translate`（英文原始错误 → 中文，`%w` 保留链）+ `httpStatusError{Status, Code, Body}`
-6. 验收：`httptest` 回放四类流——正常、跨行分片、中途断开、缺 `[DONE]`
+1. `retry.go`：`Do(ctx, attempts int, fn func(context.Context) error, onRetry func(attempt int, err error)) error`
+   —— 指数退避（1s/2s/4s，带抖动），只重试 `isRetryable`，最后一次错误原样返回
+2. `isRetryable(err error) bool`：429/5xx/网络可重试；400/401/403/404 不重试。判定基于 `httpStatusError.Status`（已在 2.5 就位）
+3. `estimate.go`：`Estimate(s string) int`（按 字符数/3 + 4 的粗估，**注释里必须写明是估算**）、`EstimateMessages`
+4. **关键设计问题（先想清楚再写）**：`StreamChat` 已经是流式的，"重试"不能简单包一层——
+   只有**在产出第一个正文增量之前**失败才能重试；一旦已经吐字，再重试会让用户看到重复内容。
+   倾向做法：把重试放进 `pump`（记录 `emitted bool`），重试时发 `EventRetry{Attempt:n}` 让 UI 显示进度。
+   这会让 `openai.go` 增加约 30 行，属于本单元而不是 2.5 的债。
+5. 验收：429 三次后报错且 UI 收到 3 个 `EventRetry`；400 一次就失败；吐字之后失败不再重试
 
-先确认要不要引 `github.com/openai/openai-go`（CODE-DESIGN §5 的 `toOpenAIMessages` 用了它的类型）。
-**引第三方 SDK 属于表外依赖，必须先问用户**；不引就自己写 `encoding/json` + `bufio.Scanner` 解析 SSE（约 150 行，可控）。
-
-## 已知坑 / 需要绕过的东西
+## 已知坑 / 需要绕过的东西## 已知坑 / 需要绕过的东西
 
 - 工具 shell 的 PATH 被裁剪：`go` 不可见 → 先 `source scripts/env.sh`（不是没装）
 - `go build ./...` 会把 main 包二进制写到当前目录 → `scripts/check.sh` 已改成 `-o <临时目录>/`
@@ -54,6 +60,10 @@
 - 工具 shell 无 TTY：`sycode` 只能验到"解析通过 → 报需要终端"；界面观感要人工在真终端看
 - 手工验配置时用 `env USERPROFILE=<临时home> HOME=<临时home> ./sycode` 隔离 `~/.sycode`，别写脏真实 home
 - 当前 shell 里 `VAR=x cmd | other` 只给 `cmd` 生效：要给被测程序传变量，写成 `... | env VAR=x ./prog`
+- **SDK 的 `stream.Err()` 不报截断**：连接在半个分片处断开时仍返回 nil（`eventStreamDecoder` 静默丢半截事件）。
+  别用它判断"是否完整"，用 `openai.go` 里的结束信号（`finish_reason`/`usage`）
+- `respjson.Field` 只有 `Valid()`/`Raw()`，没有字符串取值：DeepSeek 的 `delta.reasoning_content` 目前读不到（P4 处理）
+- `param.Opt[T]` 没有 `Get()`，用 `Valid()` + `.Value`
 
 ## 已定（原待决策，2026-10-29 采纳推荐）
 

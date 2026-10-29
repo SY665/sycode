@@ -57,8 +57,8 @@
 | 2.2 | `internal/config`：分层加载 + 密钥解析 | ✅ 三级优先级；缺 key 报"请设置环境变量 X"，错误中无密钥内容 |
 | 2.3 | 启动接线：`run()` 串起注册表 → 配置 → 密钥 → 界面 | ✅ 配好 key 时标题显示模型、日志只记 provider/model/base_url；缺 key 退出 1 并指出环境变量名，不进入界面；`--version` 不依赖密钥 |
 | 2.4 | `internal/llm`：`Request`/`Message`/`StreamEvent` + 系统提示 | ✅ 单测覆盖分段构建与终态事件（每段可单独断言；`done`/`error` 是唯一终态，`errEvent(nil)` 有兜底） |
-| 2.5 | `internal/llm/openai.go`：SSE 流式解析 | `httptest` 回放：正常/跨行分片/中断/`[DONE]` |
-| 2.6 | 重试与错误分类 | 429 重试 3 次后报错；400 不重试 |
+| 2.5 | `internal/llm/openai.go`：SSE 流式解析 | ✅ `httptest` 回放四类：正常（含 usage）、缺 `[DONE]`、截断（判为错误）、取消后 goroutine 不泄漏；分片工具调用按 `index` 归并 |
+| 2.6 | 重试与错误分类 | 429 重试 3 次后报错；400 不重试（`Translate` 与 `httpStatusError` 已就位） |
 | 2.7 | REPL 流式渲染 + `Esc` 中断 | 中断后 UI 不残留半截状态 |
 
 **退出条件**：真实端点下 `sycode run "列出当前目录文件"` 能流式返回（此时模型会说"我没有工具"——正常）。

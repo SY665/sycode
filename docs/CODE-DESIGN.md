@@ -286,26 +286,38 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 
 ### `openai.go`
 
+基于 `openai/openai-go/v3`（选型表已批准）：SDK 负责 HTTP/SSE 解码，我们只做参数转换与事件翻译。
+
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `OpenAI` | `type OpenAI struct { http *http.Client; baseURL, apiKey, model string }` | |
-| `NewOpenAI` | `func NewOpenAI(cfg OpenAIConfig) (*OpenAI, error)` | 校验 baseURL/key，**不发请求** |
-| `StreamChat` | `func (c *OpenAI) StreamChat(ctx context.Context, req Request) (<-chan StreamEvent, error)` | 起 goroutine，返回只读 channel |
-| `toOpenAIMessages` | `func toOpenAIMessages(msgs []Message) []oai.ChatCompletionMessageParamUnion` | 纯转换 |
-| `toOpenAITools` | `func toOpenAITools(schemas []tools.Schema) []oai.ChatCompletionToolUnionParam` | 纯转换 |
-| `parseSSE` | `func parseSSE(ctx context.Context, r io.Reader, out chan<- StreamEvent) error` | 解析 `data:` 分片、`[DONE]`、跨行块 |
-| `emit` | `func emit(ctx context.Context, out chan<- StreamEvent, ev StreamEvent) bool` | 带 ctx 取消的发送 |
+| `OpenAIConfig` | `type OpenAIConfig struct { BaseURL, APIKey, Model string }` | 构造输入；`APIKey` 可为空（本地端点） |
+| `OpenAI` | `type OpenAI struct { client oai.Client; model string }` | |
+| `NewOpenAI` | `func NewOpenAI(cfg OpenAIConfig) (*OpenAI, error)` | 校验模型名与端点；显式传 key、**关掉 SDK 自带重试**（重试归 2.6，要发 `EventRetry`）；**不发请求** |
+| `StreamChat` | `func (c *OpenAI) StreamChat(ctx context.Context, req Request) (<-chan StreamEvent, error)` | 起 goroutine，返回只读 channel；HTTP 层失败也走事件流 |
+| `buildParams` | `func (c *OpenAI) buildParams(req Request) (oai.ChatCompletionNewParams, error)` | 纯转换；只在"请求构造不出来"（无模型/无消息）时失败 |
+| `pump` | `func (c *OpenAI) pump(ctx, stream *ssestream.Stream[oai.ChatCompletionChunk], out chan<- StreamEvent)` | 分片 → 事件；**含截断识别**（见下） |
+| `emit` / `emitCalls` | `func emit(ctx, out, ev) bool` / `func emitCalls(ctx, out, calls []*ToolCall) bool` | 带 ctx 取消的发送；返回 false 表示下游已放弃 |
+| `toOpenAIMessages` | `func toOpenAIMessages(msgs []Message) []oai.ChatCompletionMessageParamUnion` | 纯转换；未知角色退回 user 而不是丢弃 |
+| `toOpenAIToolCall` | `func toOpenAIToolCall(call ToolCall) oai.ChatCompletionMessageToolCallUnionParam` | assistant 消息里的调用回放 |
+| `toOpenAITools` | `func toOpenAITools(schemas []ToolSchema) []oai.ChatCompletionToolUnionParam` | 纯转换；`Input` 为空时给空对象 schema |
+| `toolCallBuffer` | `merge(delta) *ToolCall` / `drain() []*ToolCall` | 按 `index` 归并分片工具调用；`start` 发快照、`end` 发完整参数 |
 
 **channel 契约**：`StreamChat` 返回的 channel 由**发送方关闭**；`EventDone`/`EventError` 是最后一个事件。
+
+**不再有 `parseSSE`**（2026-10-29）：SSE 解码在 SDK 的 `packages/ssestream` 里，自己再写一份只会重复。
+代价是 `[DONE]` 对我们不可见，因此截断识别改用结束信号：
+**收到过非空 `finish_reason` 或 `usage` 才算正常结束**，否则发 `EventError`（"连接在模型给出结束信号之前中断"）。
+实测依据：连到一半断开时 SDK 的 `stream.Err()` 仍为 `nil`（半截事件被静默丢弃），不额外判断就会把半句话当完整回答。
 
 ### `errors.go`
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Translate` | `func Translate(err error) error` | 把 provider/网络的**英文原始错误**转成中文，保留原始信息与状态码，`%w` 链不丢 |
-| `httpStatusError` | `type httpStatusError struct { Status int; Code, Body string }` | 携带结构化信息，供上层判定可重试性 |
+| `Translate` | `func Translate(err error) error` | 把 provider/网络的**英文原始错误**转成中文；顺序为 已翻译 → ctx 取消 → 超时 → `*oai.Error` → `*url.Error` → 兜底 `%w` |
+| `httpStatusError` | `type httpStatusError struct { Status int; Code, Body string; cause error }` | 结构化 HTTP 错误；`Unwrap` 保留原始链，`Error()` 产出中文 |
+| `statusHint` | `func statusHint(status int) string` | 按状态码给"下一步该干什么"：401/403 查密钥、404 查 base_url/model、429 稍后重试、5xx 服务端故障 |
 
-`Translate` 只处理原始错误；已经中文化的错误原样返回（`errors.As` 判定后直接 return）。
+`Translate` 只处理原始错误；已经中文化的错误原样返回（`errors.As` 判定后直接 return），避免"执行失败：执行失败："。
 
 ### `retry.go` / `estimate.go`
 
