@@ -583,3 +583,79 @@ func TestPermissionDialogCtrlCLeaves(t *testing.T) {
 		t.Fatal("超时：退出时没把拒绝送回去")
 	}
 }
+
+func TestToolResultRendersBelowAnswer(t *testing.T) {
+	m := newTestModel()
+	// 模型已经说了一句，工具才执行完：结果行必须排在它后面。
+	m.answer.WriteString("我来改 a.go")
+
+	updated, _ := m.Update(streamEventMsg(llm.StreamEvent{
+		Type: llm.EventToolResult,
+		Text: "edit_file 完成（2 B）\na.go（+1 / -1）\n  package main\n+ 新行\n- 旧行",
+	}))
+	m = updated.(Model)
+
+	joined := strings.Join(m.transcript, "\n")
+	for _, want := range []string{"我来改 a.go", "⎿ edit_file 完成（2 B）", "a.go（+1 / -1）", "+ 新行", "- 旧行"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("记录里缺 %q：%q", want, m.transcript)
+		}
+	}
+	if strings.Index(joined, "我来改 a.go") > strings.Index(joined, "⎿") {
+		t.Errorf("正文应在工具结果之前：%q", m.transcript)
+	}
+	// 正文已经落进记录，就不该还留在流式缓冲里，否则回合结束会重复追加一遍。
+	if m.answer.Len() != 0 {
+		t.Errorf("正文应已落进记录，缓冲里剩 %q", m.answer.String())
+	}
+}
+
+func TestToolResultColorsDiffLines(t *testing.T) {
+	m := newTestModel()
+
+	updated, _ := m.Update(streamEventMsg(llm.StreamEvent{
+		Type: llm.EventToolResult,
+		Text: "edit_file 完成\na.go\n+ 新增\n- 删除\n  上下文",
+	}))
+	m = updated.(Model)
+
+	// 比较渲染结果而不是颜色码：同一 Style 在测试环境里的输出是一致的，
+	// 断言语义（哪一行走哪个分支）而不是具体 ANSI 序列。
+	want := []string{
+		dimStyle.Render("⎿ edit_file 完成"),
+		dimStyle.Render("  a.go"),
+		addedStyle.Render("  + 新增"),
+		removedStyle.Render("  - 删除"),
+		dimStyle.Render("    上下文"),
+	}
+	if len(m.transcript) != len(want) {
+		t.Fatalf("应有 %d 行，实际 %d：%q", len(want), len(m.transcript), m.transcript)
+	}
+	for i, expect := range want {
+		if m.transcript[i] != expect {
+			t.Errorf("第 %d 行不符：期望 %q，实际 %q", i, expect, m.transcript[i])
+		}
+	}
+}
+
+func TestToolResultFailureIsMarked(t *testing.T) {
+	m := newTestModel()
+
+	updated, _ := m.Update(streamEventMsg(llm.StreamEvent{
+		Type: llm.EventToolResult,
+		Text: "bash 失败：权限不足：用户拒绝了对 . 的执行操作",
+		Err:  errors.New("权限不足：用户拒绝了对 . 的执行操作"),
+	}))
+	m = updated.(Model)
+
+	if len(m.transcript) != 1 {
+		t.Fatalf("应只有一行结果，实际 %q", m.transcript)
+	}
+	if !strings.Contains(m.transcript[0], "bash 失败") {
+		t.Errorf("失败原因应显示出来：%q", m.transcript[0])
+	}
+	// 失败走红色分支，而不是和进展一样暗色。
+	if m.transcript[0] == dimStyle.Render("⎿ bash 失败：权限不足：用户拒绝了对 . 的执行操作") {
+		t.Error("失败行不该用暗色，否则和普通进展分不开")
+	}
+}

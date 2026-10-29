@@ -11,7 +11,8 @@ const (
 	EventToolStart EventType = "tool_start"
 	EventToolEnd   EventType = "tool_end"
 	// EventToolResult 由 appstate 发出（provider 不会发）：工具执行结束。
-	// Text 是给人看的一句话摘要，Err 是失败原因；Tool 指向那次调用。
+	// Text 是给界面的一段展示文本——**第一行是摘要**，其后是展示块（diff 行、匹配列表，可能为空）。
+	// Err 是失败原因；Tool 指向那次调用。
 	// 与上面两个分开是因为它们说的不是同一件事：tool_start/end 描述"模型要调什么"，
 	// tool_result 描述"我们执行后得到了什么"。
 	EventToolResult EventType = "tool_result"

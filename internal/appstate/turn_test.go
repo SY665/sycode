@@ -85,6 +85,16 @@ func collect(t *testing.T, ch <-chan llm.StreamEvent) []llm.StreamEvent {
 	}
 }
 
+// mustSubmit 起一个回合，失败即终止测试。
+func mustSubmit(t *testing.T, state *State, input string) <-chan llm.StreamEvent {
+	t.Helper()
+	ch, err := state.Submit(context.Background(), input)
+	if err != nil {
+		t.Fatalf("提交失败：%v", err)
+	}
+	return ch
+}
+
 // stubTool 是最小工具实现。
 type stubTool struct {
 	name   string
@@ -575,5 +585,88 @@ func TestToolUsesRealGuardAndFilesystem(t *testing.T) {
 	toolMsg := second.Messages[len(second.Messages)-1]
 	if !strings.Contains(toolMsg.Content, "package main") {
 		t.Errorf("真实工具结果未回灌：%q", toolMsg.Content)
+	}
+}
+
+// toolResults 取出所有工具结果事件。
+func toolResults(events []llm.StreamEvent) []llm.StreamEvent {
+	var out []llm.StreamEvent
+	for _, ev := range events {
+		if ev.Type == llm.EventToolResult {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func TestToolResultCarriesDisplayBlock(t *testing.T) {
+	display := &tools.Display{
+		Kind:  tools.DisplayDiff,
+		Title: "a.go（+1 / -1）",
+		Lines: []string{"  package main", "+ 新行", "- 旧行"},
+	}
+	client := &fakeClient{turns: []func(context.Context) (<-chan llm.StreamEvent, error){
+		scripted(
+			llm.StreamEvent{Type: llm.EventToolEnd, Tool: &llm.ToolCall{ID: "c1", Name: "edit_file", Arguments: `{"path":"a.go"}`}},
+			llm.StreamEvent{Type: llm.EventDone},
+		),
+		scripted(
+			llm.StreamEvent{Type: llm.EventText, Text: "改好了"},
+			llm.StreamEvent{Type: llm.EventDone},
+		),
+	}}
+	registry := tools.NewRegistry()
+	_ = registry.Register(&stubTool{
+		name:   "edit_file",
+		result: tools.Result{Content: "ok", Display: display},
+	})
+
+	events := collect(t, mustSubmit(t, newState(client, registry, 0), "改一下 a.go"))
+	results := toolResults(events)
+	if len(results) != 1 {
+		t.Fatalf("应有一个工具结果事件，实际 %d", len(results))
+	}
+
+	// 界面靠"首行是摘要、其后是展示块"这个约定渲染，两者缺一用户就看不到改了什么。
+	lines := strings.Split(results[0].Text, "\n")
+	want := []string{"edit_file 完成（2 B）", "a.go（+1 / -1）", "  package main", "+ 新行", "- 旧行"}
+	if len(lines) != len(want) {
+		t.Fatalf("展示文本应为 %d 行，实际 %d 行：%q", len(want), len(lines), results[0].Text)
+	}
+	for i, expect := range want {
+		if lines[i] != expect {
+			t.Errorf("第 %d 行不符：期望 %q，实际 %q", i, expect, lines[i])
+		}
+	}
+}
+
+func TestDisplayBlockTruncatesLongOutput(t *testing.T) {
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = "+ 某一行"
+	}
+
+	block := displayBlock(&tools.Display{Kind: tools.DisplayList, Title: "20 条", Lines: lines})
+	got := strings.Split(block, "\n")
+
+	// 1 行标题 + maxDisplayLines 行内容 + 1 行省略说明。
+	if len(got) != maxDisplayLines+2 {
+		t.Fatalf("应为 %d 行，实际 %d 行：%q", maxDisplayLines+2, len(got), block)
+	}
+	if got[0] != "20 条" {
+		t.Errorf("首行应是标题，实际 %q", got[0])
+	}
+	if !strings.Contains(got[len(got)-1], "其余 8 行") {
+		t.Errorf("末行应说明省略了多少，实际 %q", got[len(got)-1])
+	}
+}
+
+func TestDisplayBlockWithoutLines(t *testing.T) {
+	if got := displayBlock(nil); got != "" {
+		t.Errorf("没有展示时不该产生文本，实际 %q", got)
+	}
+	// 只有标题的展示（glob 的"无匹配"）必须保留：否则界面看不出是没找到。
+	if got := displayBlock(&tools.Display{Title: "无匹配"}); got != "无匹配" {
+		t.Errorf("只有标题时应返回标题，实际 %q", got)
 	}
 }

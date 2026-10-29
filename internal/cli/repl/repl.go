@@ -36,6 +36,9 @@ const (
 var (
 	titleStyle = lipgloss.NewStyle().Bold(true)
 	dimStyle   = lipgloss.NewStyle().Faint(true)
+	// 用 ANSI 基本色而不是十六进制：浅色与深色终端都能看清，也不必猜背景。
+	addedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Green)
+	removedStyle = lipgloss.NewStyle().Foreground(lipgloss.Red)
 )
 
 // Deps 是界面的外部依赖。
@@ -227,8 +230,12 @@ func (m Model) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 	case llm.EventDone, llm.EventError:
 		return m.finishTurn(ev.Err)
 
+	case llm.EventToolResult:
+		m.appendToolResult(ev)
+
 	default:
-		// 工具事件、用量事件：P2 不展示（工具在 P3 才存在，用量留给状态栏）。
+		// tool_start 与 usage：调用快照与统计留给状态栏。
+		// tool_start 尤其不能渲染——它与 tool_result 说的是同一次调用，一起显示只是重复。
 	}
 
 	if m.streamCh == nil {
@@ -373,6 +380,44 @@ type streamClosedMsg struct{}
 
 // errStreamClosed 是上面那种情况的提示文案。
 var errStreamClosed = errors.New("事件流意外结束（没有收到完成或错误事件）")
+
+// appendToolResult 把一次工具执行的结果落到记录里：首行摘要，其后是展示块。
+//
+// 先 flush 正文：模型说"我改一下这个文件"，接着才是工具结果行；
+// 顺序反了读起来像工具先跑、模型后解释。
+func (m *Model) appendToolResult(ev llm.StreamEvent) {
+	if body := m.answer.String(); body != "" {
+		m.append(body)
+		m.answer.Reset()
+	}
+
+	lines := strings.Split(ev.Text, "\n")
+	summary := "⎿ " + lines[0]
+	if ev.Err != nil {
+		// 失败要显眼：同一个位置的暗色行，用户会当成又一条进展而读漏。
+		m.append(removedStyle.Render(summary))
+	} else {
+		m.append(dimStyle.Render(summary))
+	}
+	for _, line := range lines[1:] {
+		m.append(displayLine(line))
+	}
+}
+
+// displayLine 按行首字符给展示行上色。
+//
+// 不按 Kind 分支：展示块在 appstate 已拼成同一种文本，界面只认
+// "+ "（新增）、"- "（删除）、其它（上下文与列表项）三种形态。
+func displayLine(line string) string {
+	switch {
+	case strings.HasPrefix(line, "+ "):
+		return addedStyle.Render("  " + line)
+	case strings.HasPrefix(line, "- "):
+		return removedStyle.Render("  " + line)
+	default:
+		return dimStyle.Render("  " + line)
+	}
+}
 
 // append 追加一行历史，并裁剪到保留上限。
 func (m *Model) append(line string) {

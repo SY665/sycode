@@ -273,7 +273,17 @@ func toolNames(registry *tools.Registry) string {
 	return strings.Join(names, "、")
 }
 
-// summarizeResult 给界面的一句话结果。
+// maxDisplayLines 是展示块最多渲染几行。
+//
+// 必须限量：read_file 的 list 是整段带行号的文件，几百行会把屏幕刷掉。
+// 终端里只需看"改了什么、找到什么"；要看全文，打开文件更合适。
+const maxDisplayLines = 12
+
+// summarizeResult 生成给界面的展示文本：第一行摘要，其后是可选的展示块。
+//
+// 为什么不给 llm.StreamEvent 加一个 Display 字段：那要 llm 认识"给人看的 diff"，
+// 而 Display.Lines 本来就是拼好的文本行——压成字符串不丢信息，还省掉一次跨层契约变更。
+// 约定只靠"首行是摘要"维持，界面不必知道展示是 diff 还是列表。
 func summarizeResult(call llm.ToolCall, result tools.Result, err error) string {
 	if err != nil {
 		return fmt.Sprintf("%s 失败：%s", call.Name, firstLine(err.Error()))
@@ -285,7 +295,45 @@ func summarizeResult(call llm.ToolCall, result tools.Result, err error) string {
 	if result.Artifact != "" {
 		summary += "，输出已落盘"
 	}
+	if block := displayBlock(result.Display); block != "" {
+		summary += "\n" + block
+	}
 	return summary
+}
+
+// displayBlock 把结构化展示压成文本行，超出上限时截断并说明。
+//
+// 没有 Lines 但有 Title 时也返回标题：`glob` 的"无匹配"就靠这一行，
+// 否则界面只会显示"glob 完成"，看不出到底是没找到还是找到了空文件。
+func displayBlock(display *tools.Display) string {
+	if display == nil {
+		return ""
+	}
+	if len(display.Lines) == 0 {
+		return display.Title
+	}
+
+	lines := display.Lines
+	omitted := 0
+	if len(lines) > maxDisplayLines {
+		omitted = len(lines) - maxDisplayLines
+		lines = lines[:maxDisplayLines]
+	}
+
+	var b strings.Builder
+	if display.Title != "" {
+		b.WriteString(display.Title)
+	}
+	for _, line := range lines {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(line)
+	}
+	if omitted > 0 {
+		b.WriteString(fmt.Sprintf("\n…其余 %d 行未显示", omitted))
+	}
+	return b.String()
 }
 
 // firstLine 取多行文本的第一行，供摘要使用。
