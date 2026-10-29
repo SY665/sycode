@@ -88,9 +88,16 @@ type Guard struct {
 //
 // 两边一边解析一边不解析，比较就永远不相等；这个 bug 在 Linux 上看不出来（`/tmp` 通常不是链接）。
 func NewGuard(workingDir string, git *GitAwareness) *Guard {
+	blocked := defaultBlockedPaths()
+	// 名单里写的是 /etc、/usr 这类"看起来"的路径，而 IsBlocked 收到的是解析后的路径；
+	// macOS 上它们是 /private/etc 这样的链接目标，不解析就一条都拦不住。
+	for i, path := range blocked {
+		blocked[i] = resolveSymlinks(path)
+	}
+
 	guard := &Guard{
 		workDir: resolveSymlinks(absClean(workingDir)),
-		blocked: defaultBlockedPaths(),
+		blocked: blocked,
 		git:     git,
 	}
 	if home, err := os.UserHomeDir(); err == nil {

@@ -33,7 +33,9 @@ func NewGitAwareness(root string) (*GitAwareness, error) {
 	if err != nil {
 		return nil, err
 	}
-	abs = filepath.Clean(abs)
+	// 必须解析到与 IsIgnored 收到的路径同一形态（后者来自 Guard.Resolve）。
+	// 不解析的话，macOS 的 /var → /private/var 会让 Rel 直接落到"根之外"，忽略规则全部失效。
+	abs = resolveSymlinks(filepath.Clean(abs))
 
 	var patterns []gitignore.Pattern
 	collectPatterns(abs, nil, &patterns)

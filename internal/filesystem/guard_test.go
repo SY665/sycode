@@ -297,7 +297,9 @@ func TestResolveJoinsWorkDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
-	want := filepath.Join(workDir, "main.go")
+	// 期望值也要走同一次解析：Resolve 的出口是解析后的路径，
+	// 而 macOS 的临时目录 /var/... 会变成 /private/var/...。
+	want := filepath.Join(resolveSymlinks(workDir), "main.go")
 	if normalizeCase(got) != normalizeCase(want) {
 		t.Errorf("相对路径应基于工作目录：期望 %q，实际 %q", want, got)
 	}
@@ -486,5 +488,95 @@ func TestNewGuardResolvesSymlinkedWorkDir(t *testing.T) {
 	_, reason := guard.Check(filepath.Join(real, "a.txt"), OpWrite)
 	if reason.Code != ReasonInWorkdir {
 		t.Errorf("链接之下的工作目录应视为目录内，实际 %q（%s）", reason.Code, reason.Message)
+	}
+}
+
+// TestGuardRulesSurviveSymlinkedRoot 用真符号链接验证"三处解析必须一致"。
+//
+// 场景等价于 macOS 的 /var → /private/var：工作目录本身是链接，而所有文件路径
+// 解析后都落在链接目标之下。三件事必须同时成立，否则用户会觉得"目录里的文件全要授权"：
+//  1. .gitignore 仍然生效（根与路径同形态）
+//  2. 工作目录内仍是"目录内"
+//  3. 系统路径仍被拒（黑名单条目也要解析）
+//
+// Windows 默认不允许普通用户建链接，跳过；CI 的 macOS 与 Linux 会真跑。
+func TestGuardRulesSurviveSymlinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatalf("建目录失败：%v", err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("当前平台不允许建符号链接（%v）", err)
+	}
+	if err := os.WriteFile(filepath.Join(real, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
+		t.Fatalf("写 .gitignore 失败：%v", err)
+	}
+
+	git, err := NewGitAwareness(link)
+	if err != nil {
+		t.Fatalf("构造 GitAwareness 失败：%v", err)
+	}
+	guard := NewGuard(link, git)
+
+	if perm, reason := guard.Check(filepath.Join(link, "app.log"), OpRead); perm != Denied || reason.Code != ReasonIgnored {
+		t.Errorf("被忽略的文件应拒绝（ignored），实际 %v / %q（%s）", perm, reason.Code, reason.Message)
+	}
+	if _, reason := guard.Check(filepath.Join(link, "main.go"), OpWrite); reason.Code != ReasonInWorkdir {
+		t.Errorf("工作目录内的写应判为 %q，实际 %q（%s）", ReasonInWorkdir, reason.Code, reason.Message)
+	}
+	if perm, reason := guard.Check("/etc/passwd", OpRead); perm != Denied || reason.Code != ReasonSystem {
+		t.Errorf("系统路径应拒绝（system），实际 %v / %q（%s）", perm, reason.Code, reason.Message)
+	}
+}
+
+// TestGuardRulesSurviveResolvedRoot 与上一个测试等价，但不依赖建链接的能力。
+//
+// 做法是把"链接"映射到一个真实存在的目录：解析后的路径能读到文件，walk 也正常，
+// 因此在 Windows 上同样能跑（真链接那条在那里只能跳过）。
+func TestGuardRulesSurviveResolvedRoot(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatalf("建目录失败：%v", err)
+	}
+	if err := os.WriteFile(filepath.Join(real, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
+		t.Fatalf("写 .gitignore 失败：%v", err)
+	}
+	if err := os.MkdirAll(link, 0o755); err != nil {
+		t.Fatalf("建占位目录失败：%v", err)
+	}
+
+	old := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		if path == link || strings.HasPrefix(path, link+string(filepath.Separator)) {
+			return real + path[len(link):], nil
+		}
+		return old(path)
+	}
+	defer func() { evalSymlinks = old }()
+
+	git, err := NewGitAwareness(link)
+	if err != nil {
+		t.Fatalf("构造 GitAwareness 失败：%v", err)
+	}
+	guard := NewGuard(link, git)
+
+	if perm, reason := guard.Check(filepath.Join(link, "app.log"), OpRead); perm != Denied || reason.Code != ReasonIgnored {
+		t.Errorf("被忽略的文件应拒绝（ignored），实际 %v / %q（%s）", perm, reason.Code, reason.Message)
+	}
+	if _, reason := guard.Check(filepath.Join(link, "main.go"), OpWrite); reason.Code != ReasonInWorkdir {
+		t.Errorf("工作目录内的写应判为 %q，实际 %q（%s）", ReasonInWorkdir, reason.Code, reason.Message)
+	}
+
+	// 系统路径：取本平台真实存在的一个受保护位置。
+	probe := "/etc/passwd"
+	if runtime.GOOS == "windows" {
+		probe = filepath.Join(os.Getenv("SystemRoot"), "win.ini")
+	}
+	if perm, reason := guard.Check(probe, OpRead); perm != Denied || reason.Code != ReasonSystem {
+		t.Errorf("系统路径 %q 应拒绝（system），实际 %v / %q（%s）", probe, perm, reason.Code, reason.Message)
 	}
 }
