@@ -6,10 +6,12 @@ package appstate
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/sy665/sycode/internal/filesystem"
 	"github.com/sy665/sycode/internal/llm"
+	"github.com/sy665/sycode/internal/session"
 	"github.com/sy665/sycode/internal/tools"
 )
 
@@ -26,6 +28,10 @@ type Deps struct {
 	Guard  *filesystem.Guard
 	// Perm 是权限询问通道；为空时 Pending 操作会被拒绝并说明原因。
 	Perm tools.PermissionRequester
+	// Store 与 Session 是会话库与当前会话。任一为空就不落盘——
+	// 存不下历史不该妨碍对话，所以这里是可选依赖而不是必需依赖。
+	Store   *session.Store
+	Session *session.Session
 	// System 是系统提示（P3 是启动时拼一次的静态文本）。
 	System string
 	// MaxTurns 为 0 时用 defaultMaxTurns。
@@ -99,4 +105,21 @@ func (s *State) setCancel(cancel context.CancelFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cancel = cancel
+}
+
+// record 往会话库追加一条事件。
+//
+// 失败只记日志：存不下历史是遗憾，让对话因此中断是事故。
+// 会话依赖是可选的，所以这里也接受"没配库"的正常情况。
+func (s *State) record(kind session.EventKind, payload any) {
+	if s.deps.Store == nil || s.deps.Session == nil {
+		return
+	}
+	ev, err := session.NewEvent(kind, payload)
+	if err == nil {
+		err = s.deps.Store.Append(s.deps.Session, ev)
+	}
+	if err != nil {
+		slog.Warn("写入会话失败，本次对话继续", "kind", string(kind), "err", err)
+	}
 }

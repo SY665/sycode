@@ -6,6 +6,7 @@ import (
 	"github.com/sy665/sycode/internal/appstate"
 	"github.com/sy665/sycode/internal/filesystem"
 	"github.com/sy665/sycode/internal/llm"
+	"github.com/sy665/sycode/internal/session"
 	"github.com/sy665/sycode/internal/tools"
 )
 
@@ -20,18 +21,29 @@ type Core struct {
 // 编译期确认它满足接口：漏一个方法在这里就报错，而不是等装配时才炸。
 var _ AgentCore = (*Core)(nil)
 
-// New 装配一个回合引擎。
+// New 装配一个回合引擎（不落盘）。
 //
 // perm 为 nil 表示没有权限询问通道：写与执行类操作会被拒绝并说明原因（等价于只读模式）。
 // 这不是残缺，而是安全的默认——没有界面点头，就不该改用户的东西。
 func New(client llm.Client, registry *tools.Registry, guard *filesystem.Guard,
 	perm tools.PermissionRequester, system string) AgentCore {
+	return NewWithSession(client, registry, guard, perm, system, nil, nil)
+}
+
+// NewWithSession 在 New 的基础上挂上会话库：回合结束把 user/assistant 追加进 JSONL。
+//
+// 单开一个构造函数而不是给 New 加参数：New 的签名写进了 CODE-DESIGN §8，改它要动文档与所有调用点；
+// 而"要不要落盘"本来就是两种装配——测试与将来的 headless 预览都不需要库。
+func NewWithSession(client llm.Client, registry *tools.Registry, guard *filesystem.Guard,
+	perm tools.PermissionRequester, system string, store *session.Store, sess *session.Session) AgentCore {
 	return &Core{state: appstate.New(appstate.Deps{
-		Client: client,
-		Tools:  registry,
-		Guard:  guard,
-		Perm:   perm,
-		System: system,
+		Client:  client,
+		Tools:   registry,
+		Guard:   guard,
+		Perm:    perm,
+		Store:   store,
+		Session: sess,
+		System:  system,
 	})}
 }
 

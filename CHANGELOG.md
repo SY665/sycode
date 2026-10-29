@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **回合落库**（P4.2 前半）：`appstate.runTurn` 在回合开始写 `user_message`、结束时写 `assistant_turn`（正文 + 这一轮的工具摘要，只存摘要首行）。`defer` 落库，所以正常结束、出错、`Esc` 中断都会留下已经说过的话；一个字都没产出的空回合不写。**写失败只 `slog.Warn`**——存不下历史不该让对话中断。`agentcore.NewWithSession` 负责装配（`New` 保持不落盘），`main.openSession` 在建库失败时降级为"本次不落盘"而不是拒绝启动
 - `internal/session` 投影（P4.3）：`BuildTurns` 把事件流还原成中立的 `Turn{User, Assistant, Tools}`。`user_message` 开一轮、其后 `assistant_turn` 填入；同一轮里模型中途说的多段话用空行连接（工具循环会产生多条，覆盖会丢内容）；没有 user 打头的回答单独成轮而不是丢弃；`session_started`/未知类型/坏载荷跳过（老版本写的会话要能被新版本读出来）
 - `internal/session`（P4.1）：会话按事件流落成 JSONL（`~/.sycode/sessions/<目录名>-<sha1前10>/<会话ID>/transcript_events.jsonl`），**只追加永不改写**。`Store.Create/Append/Load/List/Latest`；`Seq` 由写入方递增分配；坏行（半截 JSON、`seq=0`）跳过并计数，空行不计；上一进程死在半行时先补换行再追加，避免一条坏行变两条；命名空间按「目录名（限 32 字符）+ 路径 sha1 前 10 位」，同名不同路径不撞车、同目录不同写法归一（Windows 折大小写）。**不 import `llm`**，载荷是中立的 `UserMessage`/`AssistantTurn`/`ToolRecord`
 - `internal/cleanup`（P3.8）：启动时回收 7 天前的工具输出（`~/.sycode/bash/`）。只删平铺的普通文件——不递归、不跟符号链接；目录不存在视为无事可做；单个删不掉不影响其余，错误合并返回后由 `main` 记一行 warn，**不阻断启动**

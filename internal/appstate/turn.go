@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sy665/sycode/internal/llm"
+	"github.com/sy665/sycode/internal/session"
 	"github.com/sy665/sycode/internal/tools"
 )
 
@@ -45,12 +46,25 @@ func (s *State) runTurn(ctx context.Context, input string, out chan<- llm.Stream
 	defer close(out)
 
 	s.appendMessage(llm.Message{Role: llm.RoleUser, Content: input})
+	s.record(session.KindUserMessage, session.UserMessage{Text: input})
 
 	var (
 		answer   strings.Builder
+		records  []session.ToolRecord
 		failures int
 		limit    = s.maxTurns()
 	)
+
+	// 回合结束时落库：不论正常结束、出错还是被 Esc 打断，模型已经说过的话都要留下。
+	// 用户按了 Esc 之后重开会话，看到的应当是同一段内容，而不是"刚才那些白说了"。
+	defer func() {
+		text := answer.String()
+		if text == "" && len(records) == 0 {
+			// 一个字都没产出（比如请求根本没发出去）：不该留下空回合。
+			return
+		}
+		s.record(session.KindAssistantTurn, session.AssistantTurn{Text: text, Tools: records})
+	}()
 
 	for turn := 1; turn <= limit; turn++ {
 		stream, err := s.deps.Client.StreamChat(ctx, s.buildRequest())
@@ -74,7 +88,9 @@ func (s *State) runTurn(ctx context.Context, input string, out chan<- llm.Stream
 			return
 		}
 
-		failures = s.executeTools(ctx, calls, out, failures)
+		var round []session.ToolRecord
+		failures, round = s.executeTools(ctx, calls, out, failures)
+		records = append(records, round...)
 	}
 
 	// 轮次用尽：这不是错误而是"该换个办法"，所以文案要说下一步。
@@ -164,14 +180,16 @@ func (s *State) handleEvents(ctx context.Context, stream <-chan llm.StreamEvent,
 	return calls, builder.String(), nil, errors.New("执行失败：事件流在给出终态之前就结束了")
 }
 
-// executeTools 逐个执行工具并把结果回灌给模型，返回更新后的连续失败计数。
+// executeTools 逐个执行工具并把结果回灌给模型，返回更新后的连续失败计数与工具记录。
 //
 // 失败的**也要回灌**：模型需要看到"参数错在哪""权限被拒"，才能换个做法；
 // 只往界面上报错、模型那边一片空白，它下一轮只会重复同一个调用。
-func (s *State) executeTools(ctx context.Context, calls []llm.ToolCall, out chan<- llm.StreamEvent, failures int) int {
+func (s *State) executeTools(ctx context.Context, calls []llm.ToolCall, out chan<- llm.StreamEvent,
+	failures int) (int, []session.ToolRecord) {
+	records := make([]session.ToolRecord, 0, len(calls))
 	for _, call := range calls {
 		if ctx.Err() != nil {
-			return failures
+			return failures, records
 		}
 
 		result, callErr := s.executeOne(ctx, call)
@@ -196,14 +214,22 @@ func (s *State) executeTools(ctx context.Context, calls []llm.ToolCall, out chan
 		})
 
 		// 界面需要知道"这次调用结果如何"，否则用户只看到模型在自言自语。
+		summary := summarizeResult(call, result, callErr)
 		emit(ctx, out, llm.StreamEvent{
 			Type: llm.EventToolResult,
 			Tool: &call,
-			Text: summarizeResult(call, result, callErr),
+			Text: summary,
 			Err:  callErr,
 		})
+
+		// 落库的只留一行：摘要后面的展示块是给人当场看的，存进去只会让会话文件变胖。
+		records = append(records, session.ToolRecord{
+			Name:    call.Name,
+			OK:      callErr == nil,
+			Summary: firstLine(summary),
+		})
 	}
-	return failures
+	return failures, records
 }
 
 // executeOne 查表 → 校验 → 执行。

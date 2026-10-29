@@ -542,7 +542,8 @@ type StreamEvent struct { Type EventType; Text string; Tool *ToolCall; Usage *Us
 
 | 函数 | 签名 | 职责 |
 |---|---|---|
-| `Deps` | `type Deps struct { Client llm.Client; Tools *tools.Registry; Guard *filesystem.Guard; Perm tools.PermissionRequester; MaxTurns int }` | 显式依赖，不用全局 |
+| `Deps` | `type Deps struct { Client llm.Client; Tools *tools.Registry; Guard *filesystem.Guard; Perm tools.PermissionRequester; Store *session.Store; Session *session.Session; MaxTurns int }` | 显式依赖，不用全局；会话库为空就不落盘 |
+| `record` | `func (s *State) record(kind session.EventKind, payload any)` | 追加一条会话事件；**失败只记日志**（存不下历史不该中断对话） |
 | `New` | `func New(d Deps) *State` | 只存引用 |
 | `Messages` | `func (s *State) Messages() []llm.Message` | 返回副本，防外部改写 |
 | `Append` | `func (s *State) Append(m llm.Message)` | |
@@ -581,7 +582,8 @@ type AgentCore interface {
 | 元素 | 签名 | 职责 |
 |---|---|---|
 | `Core` | `type Core struct { state *appstate.State }` | 正式实现；`var _ AgentCore = (*Core)(nil)` 在编译期确认方法齐全 |
-| `New` | `func New(client llm.Client, registry *tools.Registry, guard *filesystem.Guard, perm tools.PermissionRequester, system string) AgentCore` | 把依赖直接传给 `appstate.New` |
+| `New` | `func New(client llm.Client, registry *tools.Registry, guard *filesystem.Guard, perm tools.PermissionRequester, system string) AgentCore` | 把依赖直接传给 `appstate.New`（不落盘） |
+| `NewWithSession` | `func NewWithSession(client, registry, guard, perm, system, store *session.Store, sess *session.Session) AgentCore` | 同上并挂上会话库；单开一个构造函数而不改 `New` 的签名：落盘与否本来就是两种装配 |
 | `Submit` / `Interrupt` / `Messages` / `Clear` | 四个方法 | 全部转发给 `state`，本身不含逻辑 |
 
 > P2 曾有一个 `Direct`（自带历史与取消句柄），P3.6 起改成 `appstate` 的薄包装并删除了 `Direct`：

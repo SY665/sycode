@@ -12,6 +12,7 @@ import (
 
 	"github.com/sy665/sycode/internal/filesystem"
 	"github.com/sy665/sycode/internal/llm"
+	"github.com/sy665/sycode/internal/session"
 	"github.com/sy665/sycode/internal/tools"
 )
 
@@ -668,5 +669,119 @@ func TestDisplayBlockWithoutLines(t *testing.T) {
 	// 只有标题的展示（glob 的"无匹配"）必须保留：否则界面看不出是没找到。
 	if got := displayBlock(&tools.Display{Title: "无匹配"}); got != "无匹配" {
 		t.Errorf("只有标题时应返回标题，实际 %q", got)
+	}
+}
+
+// newStoreForTest 在临时 home 里建一个真会话库：落盘路径必须走真实现，
+// 否则测不到"事件真的写进了 JSONL"。
+func newStoreForTest(t *testing.T) (*session.Store, *session.Session) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("建会话库失败：%v", err)
+	}
+	sess, err := store.Create()
+	if err != nil {
+		t.Fatalf("建会话失败：%v", err)
+	}
+	return store, sess
+}
+
+func TestTurnWritesUserAndAssistantEvents(t *testing.T) {
+	store, sess := newStoreForTest(t)
+
+	client := &fakeClient{turns: []func(context.Context) (<-chan llm.StreamEvent, error){
+		scripted(
+			llm.StreamEvent{Type: llm.EventText, Text: "你好，我是 SyCode"},
+			llm.StreamEvent{Type: llm.EventDone},
+		),
+	}}
+	state := New(Deps{Client: client, Tools: tools.NewRegistry(), Store: store, Session: sess, System: "你是 SyCode。"})
+
+	collect(t, mustSubmit(t, state, "你好"))
+
+	loaded, err := store.Load(sess.ID)
+	if err != nil {
+		t.Fatalf("读回会话失败：%v", err)
+	}
+	// session_started + user_message + assistant_turn
+	if len(loaded.Events) != 3 {
+		t.Fatalf("应有 3 条事件，实际 %d：%+v", len(loaded.Events), loaded.Events)
+	}
+
+	var user session.UserMessage
+	if err := loaded.Events[1].Decode(&user); err != nil || user.Text != "你好" {
+		t.Errorf("用户输入未落库：%q（err=%v）", user.Text, err)
+	}
+
+	var turn session.AssistantTurn
+	if err := loaded.Events[2].Decode(&turn); err != nil {
+		t.Fatalf("回合未落库：%v", err)
+	}
+	if turn.Text != "你好，我是 SyCode" {
+		t.Errorf("正文不符：%q", turn.Text)
+	}
+	if len(turn.Tools) != 0 {
+		t.Errorf("这轮没有工具，不该有记录：%+v", turn.Tools)
+	}
+}
+
+func TestTurnRecordsToolUsage(t *testing.T) {
+	store, sess := newStoreForTest(t)
+
+	client := &fakeClient{turns: []func(context.Context) (<-chan llm.StreamEvent, error){
+		scripted(
+			llm.StreamEvent{Type: llm.EventToolEnd, Tool: &llm.ToolCall{ID: "c1", Name: "read_file", Arguments: `{"path":"main.go"}`}},
+			llm.StreamEvent{Type: llm.EventDone},
+		),
+		scripted(
+			llm.StreamEvent{Type: llm.EventText, Text: "看完了"},
+			llm.StreamEvent{Type: llm.EventDone},
+		),
+	}}
+	registry := tools.NewRegistry()
+	_ = registry.Register(&stubTool{name: "read_file", result: tools.Result{Content: "package main\n"}})
+	state := New(Deps{Client: client, Tools: registry, Store: store, Session: sess, System: "你是 SyCode。"})
+
+	collect(t, mustSubmit(t, state, "看看 main.go"))
+
+	loaded, err := store.Load(sess.ID)
+	if err != nil {
+		t.Fatalf("读回会话失败：%v", err)
+	}
+	last := loaded.Events[len(loaded.Events)-1]
+	var turn session.AssistantTurn
+	if err := last.Decode(&turn); err != nil {
+		t.Fatalf("回合未落库：%v", err)
+	}
+	if len(turn.Tools) != 1 {
+		t.Fatalf("应记 1 次工具调用，实际 %+v", turn.Tools)
+	}
+	if turn.Tools[0].Name != "read_file" || !turn.Tools[0].OK {
+		t.Errorf("工具记录不符：%+v", turn.Tools[0])
+	}
+	// 落库的摘要必须是一行：展示块是当场给人看的，存进去只会让文件变胖。
+	if strings.Contains(turn.Tools[0].Summary, "\n") {
+		t.Errorf("工具摘要应只有一行：%q", turn.Tools[0].Summary)
+	}
+}
+
+func TestTurnWithoutStoreDoesNotFail(t *testing.T) {
+	// 没有会话库是正常装配（测试、预览都这么用）：对话必须照常走完。
+	client := &fakeClient{turns: []func(context.Context) (<-chan llm.StreamEvent, error){
+		scripted(
+			llm.StreamEvent{Type: llm.EventText, Text: "照常回答"},
+			llm.StreamEvent{Type: llm.EventDone},
+		),
+	}}
+	state := New(Deps{Client: client, Tools: tools.NewRegistry(), System: "你是 SyCode。"})
+
+	events := collect(t, mustSubmit(t, state, "你好"))
+	if final := terminal(t, events); final.Type != llm.EventDone {
+		t.Errorf("应以 done 收尾：%+v", final)
 	}
 }

@@ -1,6 +1,6 @@
 # 当前状态
 
-更新时间：2026-10-29 23:30 | 阶段：**P4** | 当前单元：4.1 与 4.3 已完成，下一单元 4.2（恢复接线）
+更新时间：2026-10-29 23:55 | 阶段：**P4** | 当前单元：4.1/4.2前半/4.3 已完成，下一单元 4.2后半（恢复 + `--new`）
 
 ## 已完成（本阶段）
 
@@ -119,29 +119,32 @@
   - `user_message` 开一轮，其后 `assistant_turn` 填入；同一轮多段正文用空行连接（工具循环会产生多条，覆盖就丢内容）
   - 无 user 打头的回答单独成轮、`User` 留空：那是异常中断留下的，仍是模型说过的话
   - `session_started`/未知类型跳过 → 老版本写的会话能被新版本读出来
-- 代码 13,016 行（源码 6,581 / 测试 6,435），34 笔提交；直接依赖 7 个
-- 记录：`output-1..2_impl-*.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
+- 单元 4.2 前半已收口（回合落库）：`state.go` +18、`turn.go` +30、`adapter.go` +20、`main.go` +20，测试 +120
+  - `appstate.Deps` 加可选 `Store`/`Session`；`record` 失败**只 slog.Warn**——存不下历史不该中断对话
+  - 落库用 `defer`：正常结束、出错、Esc 中断都会留下已说过的话；空回合不写
+  - 落库的工具摘要只存**首行**（展示块是当场给人看的，存进去只会让会话文件变胖）
+  - `agentcore.NewWithSession` 负责装配，`New` 保持"不落盘"——落盘与否本来就是两种装配，不动既有签名
+  - `main.openSession` 建库失败降级为"本次不落盘"，不拒绝启动
+  - 二进制冒烟：隔离 home 下生成了 `sessions/sycode-0115d072e0/<ID>/transcript_events.jsonl`，首条 `session_started` 的 `work_dir` 正确
+- 代码 13,215 行（源码 6,665 / 测试 6,550），35 笔提交；直接依赖 7 个
+- 记录：`output-1..3_impl-*.md`（阶段 4）、`output-1..9_impl-*.md`（阶段 3）、`output-2..7_impl-*.md`（阶段 2）、`output-1..5_impl-*.md`（阶段 1）
 
 ## 下一步第一件事（具体到文件与函数）
 
-**P4 单元 4.2 —— 恢复接线**（`appstate` + `repl` + `cmd`；别一次扩到 `/sessions` 或 `/context`）
+**P4 单元 4.2 后半 —— 启动恢复 + `--new`**（`repl` + `cmd` + `appstate` 各一小处）
 
-1. `appstate.Restore(turns []session.Turn)`：把 Turn 转成 `llm.Message` 交替序列，写进历史
-2. **关键限制，先想清楚**：恢复的历史**只有正文，没有 tool 消息**。工具摘要不进上下文，
-   因为 tool 消息必须对应 `tool_calls`（id + 参数），而库里只存了摘要。重启后模型不知道"上次跑过什么"，
-   但用户看得到。若将来要让模型也知道，得在 `AssistantTurn` 里存完整调用——那是改存储格式，先问人
-3. `repl` 启动时：`Store.Latest()` 有结果 → 恢复并在标题下显示一行 `已恢复 <ID>（N 轮）`；
-   `--new` 强制新建。命令行的 flag 加在 `cmd/root.go`，**这是新增公开选项，属可预知的小事**，但要在
-   `docs/CODE-DESIGN.md` §2 的 `Options` 表里登记
-4. 回合结束时写库：`appstate.runTurn` 在 `EventDone` 前追加 `assistant_turn`（先写 user_message 在回合开始）；
-   **失败只记日志**——存不下历史不该让对话中断
-5. 验收：真跑两轮 → 退出 → 重启同目录自动接上；换目录看不到别人的会话
+1. `appstate.Restore(turns []session.Turn)`：Turn → `llm.Message` 交替序列写进历史。
+   **只放正文**：`Tools` 不进消息（tool 消息必须对应带 id 的 `tool_calls`，库里只有摘要），
+   工具痕迹留给界面展示；这一限制要写进 `Restore` 的文档注释，别让后来人以为漏了
+2. `repl`：`Deps` 加 `Restored []agentcore.Turn`（或直接传 `*session.Loaded` 的投影），
+   启动后在标题下画一行 `已恢复 <ID>（N 轮）`
+3. `cmd/root.go`：`Options` 加 `NewSession bool`，绑定 `--new`；`Env` 已经把 Store 建好了，
+   所以恢复逻辑放 `main.buildEnv` 更顺——`--new` 时 `store.Create()`，否则 `store.Latest()` 命中就 `Load` + `BuildTurns`
+4. `main.buildEnv` 需要知道 `--new`：`buildEnv` 目前无参，改为 `buildEnv(newSession bool)` 或让 `cmd.Options` 传进去
+   （**这是改对外签名，属可预知的小事，但要同步 `CODE-DESIGN.md` §1 的启动顺序表**）
+5. 验收：真跑两轮 → 退出 → 同目录重启自动接上（标题下那行在）；`--new` 后是空历史；换目录看不到别人的会话
 
-**不要顺手做**：`/sessions` 选择器（4.5）、`/context`（4.4）。会话文件目前靠 `Store.List()` 全扫，
-几十个会话无感，先别引索引。
-
-**注意规模**：这一单元四处都要动，容易超 300 行。真超了就按「写库（4）+ 恢复（1、2）」与
-「UI 与 flag（3）」拆两笔：前者可独立验证（跑完直接看文件），后者依赖前者。
+**别顺手做**：`/sessions` 选择器（4.5）、`/context`（4.4）。
 
 ## 已知坑 / 需要绕过的东西
 

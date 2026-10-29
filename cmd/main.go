@@ -19,6 +19,7 @@ import (
 	"github.com/sy665/sycode/internal/llm"
 	"github.com/sy665/sycode/internal/logging"
 	"github.com/sy665/sycode/internal/providers"
+	"github.com/sy665/sycode/internal/session"
 	"github.com/sy665/sycode/internal/tools"
 )
 
@@ -154,11 +155,33 @@ func buildEnv() (cmd.Env, error) {
 		return cmd.Env{}, err
 	}
 
+	// 会话库：拿到就落盘，拿不到就只在内存里跑——丢的是历史，不该是这次对话。
+	store, sess := openSession(workDir)
+
 	return cmd.Env{
-		Model:      resolved.ModelID,
-		Core:       agentcore.New(client, writeRegistry, guard, perm, llm.Build(promptEnv(resolved.ModelID, workDir))),
+		Model: resolved.ModelID,
+		Core: agentcore.NewWithSession(client, writeRegistry, guard, perm,
+			llm.Build(promptEnv(resolved.ModelID, workDir)), store, sess),
 		Permission: perm,
 	}, nil
+}
+
+// openSession 建立一个新会话。
+//
+// 每次启动都新建：恢复上一次是 4.2 接线的事，这里只负责"这次说的话别丢"。
+func openSession(workDir string) (*session.Store, *session.Session) {
+	store, err := session.NewStore(workDir)
+	if err != nil {
+		slog.Warn("会话目录不可用，本次对话不会落盘", "err", err)
+		return nil, nil
+	}
+	sess, err := store.Create()
+	if err != nil {
+		slog.Warn("无法新建会话，本次对话不会落盘", "err", err)
+		return nil, nil
+	}
+	slog.Debug("会话已建立", "id", sess.ID)
+	return store, sess
 }
 
 // buildTools 注册全部工具。顺序固定：模型看到 schema 的顺序会影响它的选择倾向。
