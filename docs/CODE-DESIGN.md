@@ -400,7 +400,16 @@ type AgentCore interface {
 }
 ```
 
-`adapter.go`：`New(client llm.Client, r *tools.Registry, g *filesystem.Guard, perm tools.PermissionRequester) AgentCore` + 四个方法（全部转发 `appstate`）。
+`adapter.go` 分两步落地：
+
+| 阶段 | 元素 | 签名 | 职责 |
+|---|---|---|---|
+| **P2（已实现）** | `Direct` | `type Direct struct { client llm.Client; system string; messages; cancel }` | 一次请求 + 一串事件 + 一份历史：没有工具、没有落盘、没有压缩 |
+| | `NewDirect` | `func NewDirect(client llm.Client, system string) *Direct` | P2 的构造函数；P3 由下面那个取代，接口不变 |
+| | `Submit` | `func (d *Direct) Submit(ctx, input) (<-chan llm.StreamEvent, error)` | 拼"历史 + 本轮输入"→ 请求；**成功后才把用户消息记进历史** |
+| | `forward` | `func (d *Direct) forward(ctx, stream, out)` | 转发事件并累积正文；结束时写一条 assistant 消息（空回答不写） |
+| | `recordAnswer` | `func (d *Direct) recordAnswer(text string)` | **中断也记**：用户已看到的内容，下一轮模型也该看到（PRD F-LLM-6） |
+| P3（待实现） | `New` | `func New(client llm.Client, r *tools.Registry, g *filesystem.Guard, perm tools.PermissionRequester) AgentCore` | 四个方法全部转发 `appstate` |
 
 `setup_tools.go`：把 UI 能力适配成工具需要的窄接口。
 

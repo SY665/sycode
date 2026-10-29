@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `internal/agentcore`：`AgentCore` 接口（`Submit`/`Interrupt`/`Messages`/`Clear`）+ P2 的直连实现 `NewDirect`——界面不再直接碰 `llm.Client`；中断后已产出文本仍入历史（PRD F-LLM-6），请求都发不出去的那次不入历史
 - `internal/llm/retry.go`：`Do` 指数退避重试（`maxRetries=3`、封顶 30s、加抖动且不越界）；`isRetryable` 认 429/5xx/连接失败/流截断，不认 4xx/取消/超时；`partialError` 让"已吐字之后"的失败不再重试
 - `internal/llm/openai.go` 重试接线：重试只发生在 `run`，每次失败发 `EventRetry{Attempt:n}` 供 UI 显示进度
 - `internal/llm/openai.go`：OpenAI 兼容流式客户端（`openai/openai-go/v3`）。`NewOpenAI` 只校验、关掉 SDK 自带重试；`StreamChat` 返回由发送方关闭的事件 channel，HTTP 错误也走事件流；分片工具调用按 `index` 归并（`tool_start` 发快照、`tool_end` 发完整参数）；**截断识别**——没收到 `finish_reason`/`usage` 就结束时报错，不把半句话当完整回答
