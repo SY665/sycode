@@ -53,7 +53,7 @@ run() int
  ├─ 2. providers.Load()          → 内嵌 registry.yaml           失败：panic 级配置错误，退出 1
  ├─ 3. config.Load()             → ~/.sycode/configs.json        缺失：走默认，非致命
  ├─ 4. config.Resolve()          → 合并 flag > env > 文件 > 默认
- ├─ 5. config.ResolveKey()       → env → 配置文件                缺失：友好报错，退出 2（用法错误）
+ ├─ 5. config.ResolveKey()       → env → 配置文件                缺失：友好报错，退出 1
  ├─ 6. filesystem.NewGitAwareness(workdir) → NewGuard(workdir, git)
  ├─ 7. llm.NewOpenAI(cfg)        → 只存配置，不发请求
  ├─ 8. session.NewStore(workdir)
@@ -62,6 +62,13 @@ run() int
  ├─ 11. cleanup.Run()            → 异步，失败只记日志，不影响主流程
  └─ 12. repl.Run(ctx, deps)      → 阻塞直到用户退出
 ```
+
+**步骤 2–5 由 `main.resolveModel()` 实现，且延迟到进入界面之前才执行**（注入为 `cmd.Options.ResolveModel`）。
+理由：版本与帮助不需要密钥，若在 `run()` 里提前跑完，新用户敲的第一条 `sycode --version`
+会直接撞上"缺少密钥"，恰好卡在他还没机会配置的时候。
+
+**退出码口径**（ARCHITECTURE §411）：0 成功 / 1 一般错误 / 2 用法错误。配置类失败（缺密钥、`configs.json` 写坏、
+模型不属于供应商）一律**退出 1**——它们不是命令行参数写错，印成"参数错误：… 用法见 --help"只会误导。
 
 关闭：`repl.Run` 返回 → 会话已落盘（每次 `Append` 都是即时的）→ `defer logging.cleanup()` → 返回退出码。
 
@@ -76,6 +83,7 @@ run() int
 | `version` | `var version = "dev"` | 构建时 `-X main.version=` 覆盖。**必须是 var**：`-X` 只改写字符串变量，对 const 静默失效（实测仍输出默认值），构建看似成功但版本号是错的 |
 | `main` | `func main()` | 仅 `os.Exit(run())` |
 | `run` | `func run() int` | 按 §1 顺序组装；把错误分流到 stderr 与退出码 |
+| `resolveModel` | `func resolveModel() (string, error)` | §1 的 2–5 步（注册表 → 配置 → 合并 → 密钥校验），返回模型名；错误原样上抛，不叠前缀 |
 
 不做什么：不解析参数、不打印帮助、不判断"是不是交互式"。
 
@@ -83,9 +91,10 @@ run() int
 
 | 元素 | 签名 | 职责 |
 |---|---|---|
-| `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer }` | 注入版本与输出，便于测 |
+| `Options` | `type Options struct { Version, Commit string; Stdout, Stderr io.Writer; ResolveModel func() (string, error); StartREPL func(model string) error }` | 注入版本、输出与模型解析器；后两项是测试替换点 |
 | `NewRootCommand` | `func NewRootCommand(opts Options) *cobra.Command` | 建 root + `version` + `run` 子命令；同时完成汉化 |
-| `runREPL` | `func runREPL(opts Options) error` | 进入交互界面（P1.4 实装，当前返回"尚未实现"） |
+| `runREPL` | `func runREPL(opts Options) error` | 先解析模型（失败则不进界面、退出 1），再把模型名交给界面 |
+| `resolveModel` | `func resolveModel(opts Options) (string, error)` | 调注入的解析器；未注入视为"没有模型"，只测命令树时不必造配置 |
 | `newVersionCmd` | `func newVersionCmd(opts Options) *cobra.Command` | 输出 `0.1.0 (build abc1234)` |
 | `newRunCmd` | `func newRunCmd() *cobra.Command` | headless 单回合（P4 实装） |
 | `versionString` | `func versionString(opts Options) string` | 有提交号才带 `(build …)`，避免空括号 |

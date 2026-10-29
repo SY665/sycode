@@ -24,9 +24,15 @@ type Options struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 
-	// StartREPL 允许测试替换交互入口。为空时走真实界面。
+	// ResolveModel 在进入界面之前解析要用的模型名（如 "gpt-4o-mini"），解析失败则不进入界面。
+	//
+	// 之所以交给调用方延迟执行、而不是在 run() 里算好传进来：版本、帮助不需要密钥，
+	// 提前解析会让 `sycode --version` 在没有 key 的机器上直接失败。
+	ResolveModel func() (string, error)
+
+	// StartREPL 允许测试替换交互入口，参数是已解析的模型名。为空时走真实界面。
 	// 不这样做的话，"无参数启动"的测试会真的把终端交给 Bubble Tea，在交互式终端里跑 go test 时会挂住。
-	StartREPL func() error
+	StartREPL func(model string) error
 }
 
 // NewRootCommand 构建 sycode 的根命令。
@@ -85,12 +91,28 @@ func NewRootCommand(opts Options) *cobra.Command {
 	return root
 }
 
-// runREPL 进入交互式界面；测试可经 Options.StartREPL 替换。
+// runREPL 解析模型后进入交互式界面；测试可经 Options.StartREPL 替换界面本身。
+//
+// 解析失败（缺密钥、配置写错）属于"用户需要去动手"，不是用法错误：
+// 原样返回让 main 打一行"错误：…"并退出 1，不进入界面，也不刷用法提示。
 func runREPL(opts Options) error {
-	if opts.StartREPL != nil {
-		return opts.StartREPL()
+	model, err := resolveModel(opts)
+	if err != nil {
+		return err
 	}
-	return repl.Run(context.Background(), repl.Deps{Version: versionString(opts)})
+	if opts.StartREPL != nil {
+		return opts.StartREPL(model)
+	}
+	return repl.Run(context.Background(), repl.Deps{Version: versionString(opts), Model: model})
+}
+
+// resolveModel 调用注入的解析器；未注入时按"没有模型"处理，界面照常可用。
+// 这样只测命令树（帮助、版本、参数错误）时不必构造注册表与配置文件。
+func resolveModel(opts Options) (string, error) {
+	if opts.ResolveModel == nil {
+		return "", nil
+	}
+	return opts.ResolveModel()
 }
 
 // newVersionCmd 提供 `sycode version`，与 `--version` 等价。

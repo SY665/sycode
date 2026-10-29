@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **启动接线**：`run()` 经 `resolveModel` 串起注册表 → 配置 → 合并 → 密钥校验；解析成功把模型名交给界面标题，`slog.Debug` 只记 provider/model/base_url；解析失败（缺密钥、配置写坏、模型与供应商不匹配）不进入界面、退出码 1 并给出可操作文案；`--version` / `--help` 不依赖密钥
 - `internal/config`：`configs.json` 加载（缺文件不报错）、三级优先级合并（参数 > 配置 > 注册表）、密钥按环境变量名解析且不回显
 - `internal/providers`：内嵌 `registry.yaml`（3 供应商 / 4 模型）、`Load`/`LoadFile`/`Find`/`Default`，含 6 类非法注册表校验
 - `internal/cli/cmd/deps_test.go`：用 `go list` 读取真实 import 图，断言 `CODING-STANDARDS §2.2` 的禁止边（已做反证：注入违规会失败）

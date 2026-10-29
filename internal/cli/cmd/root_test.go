@@ -106,7 +106,7 @@ func TestRootCommand_NoArgsStartsREPL(t *testing.T) {
 		Version: "0.1.0",
 		Stdout:  &bytes.Buffer{},
 		Stderr:  &bytes.Buffer{},
-		StartREPL: func() error {
+		StartREPL: func(string) error {
 			called = true
 			return sentinel
 		},
@@ -122,6 +122,84 @@ func TestRootCommand_NoArgsStartsREPL(t *testing.T) {
 	}
 	if code := ExitCode(err); code != 1 {
 		t.Errorf("界面错误按一般错误处理，期望退出码 1，实际 %d", code)
+	}
+}
+
+func TestRootCommand_PassesResolvedModelToREPL(t *testing.T) {
+	// 标题里的模型名来自解析结果，断了这条线界面就会显示空模型。
+	var got string
+	root := NewRootCommand(Options{
+		Version:      "0.1.0",
+		Stdout:       &bytes.Buffer{},
+		Stderr:       &bytes.Buffer{},
+		ResolveModel: func() (string, error) { return "deepseek-chat", nil },
+		StartREPL: func(model string) error {
+			got = model
+			return nil
+		},
+	})
+	root.SetArgs(nil)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("解析成功时不应报错：%v", err)
+	}
+	if got != "deepseek-chat" {
+		t.Fatalf("界面应拿到已解析的模型名，实际 %q", got)
+	}
+}
+
+func TestRootCommand_ResolveFailureSkipsREPL(t *testing.T) {
+	// 缺密钥必须止步于界面之前：进去后用户只会看到空壳，还得自己猜原因。
+	entered := false
+	root := NewRootCommand(Options{
+		Version: "0.1.0",
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		ResolveModel: func() (string, error) {
+			return "", errors.New(`缺少密钥：请设置环境变量 OPENAI_API_KEY（供应商 "openai"）`)
+		},
+		StartREPL: func(string) error {
+			entered = true
+			return nil
+		},
+	})
+	root.SetArgs(nil)
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("解析失败应返回错误")
+	}
+	if entered {
+		t.Fatal("解析失败时不应进入界面")
+	}
+	// 缺密钥不是用法错误：退出码 1，避免 main 把它印成"参数错误：…用法见 --help"。
+	if code := ExitCode(err); code != 1 {
+		t.Errorf("配置类失败期望退出码 1，实际 %d", code)
+	}
+	if !strings.Contains(err.Error(), "缺少密钥") || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Errorf("错误应指明缺什么、该设哪个变量，实际：%v", err)
+	}
+}
+
+func TestRootCommand_VersionDoesNotResolveModel(t *testing.T) {
+	// sycode --version 是排障第一站，绝不能因为没配密钥而失败。
+	called := false
+	root := NewRootCommand(Options{
+		Version: "0.1.0",
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		ResolveModel: func() (string, error) {
+			called = true
+			return "", errors.New("不应该被调用")
+		},
+	})
+	root.SetArgs([]string{"--version"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("--version 不应依赖模型解析：%v", err)
+	}
+	if called {
+		t.Fatal("--version 不应触发模型解析")
 	}
 }
 
